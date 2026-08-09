@@ -10,20 +10,25 @@ import type { Tenant } from "./types.ts";
 
 /** Public embed snippet for a chatbot (convo4.md).
  *
- * If WIDGET_BASE_URL is set (e.g. "https://chat.yourdomain.com/widget.js") the
- * snippet uses that clean, branded domain and carries ONLY the opaque public
- * widget id ("cb_...") — never the internal slug or the Supabase project URL.
- * Without it we fall back to the platform's own Supabase functions URL so the
- * widget keeps working in local/dev environments.
+ * WIDGET_BASE_URL is the public widget URL, for example
+ * "https://chat.yourdomain.com/widget.js". The snippet carries only the
+ * opaque public chatbot id — never the internal slug or tenant id.
+ *
+ * The Supabase fallback is retained for development/backwards compatibility;
+ * production deployments should set WIDGET_BASE_URL so customer-facing
+ * installation code uses the branded chat domain.
  */
 export function embedScriptFor(publicId: string): string {
-  const base = env("WIDGET_BASE_URL")?.trim();
-  if (base) {
-    const src = base.replace(/\/+$/, "");
-    return `<!-- ChatWidget -->\n<script async src="${src}" data-chatbot="${publicId}"></script>`;
+  const id = publicId.trim();
+  if (!id) throw new Error("A public chatbot id is required");
+
+  const configured = env("WIDGET_BASE_URL")?.trim();
+  if (configured) {
+    const src = configured.replace(/\/+$/, "");
+    return `<!-- ChatWidget -->\n<script async src="${src}" data-chatbot="${id}"></script>`;
   }
-  const supabase = env("SUPABASE_URL") ?? "https://xsegdfcqqktxoqlbazpl.supabase.co";
-  return `<!-- ChatWidget -->\n<script async src="${supabase}/functions/v1/widget" data-chatbot="${publicId}"></script>`;
+
+  throw new Error("WIDGET_BASE_URL is required to generate a public embed snippet");
 }
 
 export interface AuthUser {

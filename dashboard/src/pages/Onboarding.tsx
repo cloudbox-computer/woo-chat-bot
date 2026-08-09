@@ -380,8 +380,8 @@ export default function Onboarding() {
               <>
                 <div className="codeblock">{result.embedScript}</div>
                 <p className="muted" style={{ marginTop: 12 }}>
-                  Assistant <strong>{result.chatbotId}</strong> · tenant <strong>{result.slug}</strong>.
-                  This script is also shown in the dashboard under <strong>Install</strong>.
+                  Public chatbot ID <strong>{result.publicId}</strong>. This is the only tenant identifier included in the installation snippet.
+                  The snippet is also shown in the dashboard under <strong>Install</strong>.
                 </p>
                 <a href="/" className="btn" style={{ marginTop: 12 }}>Open your dashboard</a>
               </>

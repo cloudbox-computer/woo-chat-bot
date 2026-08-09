@@ -1,34 +1,29 @@
 # Ivy & Pearls — WordPress / WooCommerce integration
 
-Add the chatbot to the store with one script tag. No plugin required.
+Add the chatbot to the store with one script tag. The customer-facing snippet uses your branded widget URL and an opaque public chatbot ID. It does not contain a Supabase project URL, internal tenant slug or secret credential.
 
 ## 1. One-time: deploy the backend
 
-Follow the Deploying section in `README.md`. You end up with a project ref,
-e.g. `https://<ref>.supabase.co/functions/v1/chat`.
+Deploy the widget and API behind your branded public host, for example `https://chat.yourdomain.com/widget.js`. Set `WIDGET_BASE_URL=https://chat.yourdomain.com/widget.js` in the Edge Function environment. The onboarding wizard and dashboard then generate the correct tenant-specific snippet.
+
+Supabase can remain the implementation layer behind that host; it should not appear in the customer-facing installation code.
 
 ## 2. Add the widget to WordPress
 
-**Option A — a snippet plugin (recommended).** Install any "header and footer
-scripts" plugin (e.g. WPCode) and paste this into the footer/body scripts box:
+Paste the exact snippet generated for the tenant into a footer/header scripts plugin or just before `</body>` in `footer.php`:
 
 ```html
-<script
-  src="https://<ref>.supabase.co/functions/v1/widget.js"
-  data-chatbot-id="ivy-pearls"
-  data-api-url="https://<ref>.supabase.co/functions/v1"
-  data-title="Ivy & Pearls"
-  data-subtitle="Hi! I can help you find jewellery, check an order, or recommend a gift."
-  data-brand-colour="#9c7b4f"
-></script>
+<!-- Your AI Assistant -->
+<script async src="https://chat.yourdomain.com/widget.js" data-chatbot="cb_7f82k91"></script>
 ```
 
-**Option B — theme `footer.php`.** Open Appearance → Theme File Editor →
-`footer.php` and paste the same snippet just before `</body>`.
+The `cb_...` value is an opaque public chatbot ID. It is not a secret, but it avoids exposing the internal tenant slug and keeps the installation independent of Supabase. Do not add `data-api-url`, `data-chatbot-id` or `?tenant=...`.
 
-**Option C — future plugin.** A tiny WordPress plugin (Ivy & Pearls → Plugins →
-"Your Chatbot", enter Chatbot ID: `ivy-pearls`) would automate this injection.
-Not needed to start.
+**Option A — a snippet plugin (recommended).** Install any "header and footer scripts" plugin (e.g. WPCode) and paste the generated snippet into the footer/body scripts box.
+
+**Option B — theme `footer.php`.** Open Appearance → Theme File Editor → `footer.php` and paste the generated snippet just before `</body>`.
+
+**Option C — future plugin.** A tiny WordPress plugin could inject the generated snippet automatically. Not needed to start.
 
 ## 3. What the widget can do (Phase 1 + 2)
 
@@ -63,8 +58,6 @@ Ivy & Pearls product range so the demo works before real credentials exist.
 1. Open the store, hard-refresh (Cmd/Ctrl+Shift+R).
 2. A circular button should appear bottom-right.
 3. Try "Do you have gold necklaces under £100?" — you should get product cards.
-4. Check the Edge Function logs (Supabase dashboard → Edge Functions → chat →
-   Logs) if anything fails.
+4. Check the application logs if anything fails.
 
-If the bubble doesn't appear, open DevTools → Console. The most common cause
-is a wrong `data-api-url` (must end in `/functions/v1`, no trailing slash).
+If the bubble doesn't appear, open DevTools → Console. The most common causes are a wrong branded widget URL, a missing `data-chatbot="cb_..."` attribute, or a chatbot that is inactive.

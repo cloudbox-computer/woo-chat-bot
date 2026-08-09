@@ -81,19 +81,14 @@ WooCommerce → Settings → Advanced → REST API → **Add key** (Read/Write).
 
 ## 3. Install on WordPress (one script tag)
 
-Any "header and footer scripts" plugin (e.g. WPCode) — or `footer.php` —
-paste before `</body>`:
+Set `WIDGET_BASE_URL` to the public branded widget URL, such as `https://chat.yourdomain.com/widget.js`. The onboarding wizard returns the tenant's exact snippet; paste that snippet before `</body>`:
 
 ```html
-<script
-  src="https://<ref>.supabase.co/functions/v1/widget.js"
-  data-chatbot-id="ivy-pearls"
-  data-api-url="https://<ref>.supabase.co/functions/v1"
-  data-title="Ivy & Pearls"
-  data-subtitle="Hi! I can help you find jewellery, check an order, or recommend a gift."
-  data-brand-colour="#9c7b4f"
-></script>
+<!-- Your AI Assistant -->
+<script async src="https://chat.yourdomain.com/widget.js" data-chatbot="cb_7f82k91"></script>
 ```
+
+The `cb_...` value is an opaque public chatbot id. The customer-facing snippet must not contain a Supabase URL, `data-chatbot-id`, `data-api-url` or `?tenant=...`.
 
 That's it — no plugin needed to start. Full table of what customers can ask:
 see `docs/wordpress-integration.md`.

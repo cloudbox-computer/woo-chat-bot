@@ -50,8 +50,8 @@ Deno.serve(async (req: Request) => {
     const url = new URL(req.url);
     const q = url.searchParams.get("chatbot") ?? url.searchParams.get("chatbotId");
     if (req.method === "POST") {
-      const body = await req.json().catch(() => ({}));
-      ref = typeof body.chatbotId === "string" ? body.chatbotId : null;
+      const data = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+      ref = typeof data.chatbotId === "string" ? data.chatbotId : null;
     }
     if (typeof q === "string" && q) ref = q;
 

@@ -118,6 +118,8 @@ bun run typecheck          # tsc for supabase functions + widget
 bun run dev                # http://localhost:3001 — demo store + widget
 ```
 
+The customer-facing installation snippet uses a branded widget URL plus an opaque public chatbot id (`cb_...`). It does not expose the Supabase project URL, internal tenant slug or `data-chatbot-id`; see `docs/wordpress-integration.md`.
+
 Tests run via the production runtime (Deno) when available, and fall back to a
 Bun runner automatically, so `bun run test` works even without Deno installed.
 

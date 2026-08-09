@@ -64,6 +64,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   if (!chatbot) throw new AgentError(`Unknown or inactive chatbot: ${req.chatbotId}`, 404);
   const tenant = await db.getTenantByChatbot(chatbot.id);
   if (!tenant) throw new AgentError(`No tenant for chatbot: ${req.chatbotId}`, 404);
+  const chatbotId = chatbot.id;
 
   const policy = buildPolicy(tenant);
   const priorConversationId = req.conversationId ?? "";
@@ -91,7 +92,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   let fresh = false;
   if (conversationId) {
     const existing = await db.getConversation(conversationId);
-    if (existing && existing.chatbotId !== req.chatbotId) {
+    if (existing && existing.chatbotId !== chatbotId) {
       throw new AgentError("Conversation does not belong to this chatbot", 400);
     }
     if (!existing) conversationId = undefined;
@@ -101,7 +102,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     fresh = true;
     await db.createConversation({
       id: conversationId,
-      chatbotId: req.chatbotId,
+      chatbotId,
       customerEmail: req.customerEmail,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -121,7 +122,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   }
   transcript.push({ role: "user", content: req.message });
 
-  const knowledgeContext = await seedKnowledge(db, req.chatbotId, req.message);
+  const knowledgeContext = await seedKnowledge(db, chatbotId, req.message);
 
   let finalContent = "";
   let products: Product[] = [];
@@ -150,7 +151,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
       break;
     }
 
-    const ctx = { tenant, chatbotId: req.chatbotId, conversationId, db, allowed };
+    const ctx = { tenant, chatbotId, conversationId, db, allowed };
     for (const call of result.toolCalls) {
       const toolResult = await executeTool(call.name, call.arguments, ctx);
       transcript.push({

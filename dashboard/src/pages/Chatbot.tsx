@@ -133,8 +133,8 @@ export default function ChatbotPage({
           </p>
           <div className="codeblock">{data.embedScript}</div>
           <p className="muted" style={{ marginTop: 12 }}>
-            The widget loads your store's products, knowledge and policies automatically. No other configuration
-            needed.
+            The widget loads your store's products, knowledge and policies automatically. The snippet uses an opaque public chatbot ID and does not expose your internal tenant name or Supabase project URL.
+            No other configuration needed.
           </p>
         </Card>
       )}

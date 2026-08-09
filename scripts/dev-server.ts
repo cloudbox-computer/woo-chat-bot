@@ -39,12 +39,39 @@ async function handle(req: Request): Promise<Response> {
     }
   }
 
+  // API: public widget config
+  if (url.pathname === "/widget-config" && (req.method === "GET" || req.method === "POST")) {
+    const ref = req.method === "GET"
+      ? url.searchParams.get("chatbot") ?? url.searchParams.get("chatbotId")
+      : String((await req.json().catch(() => ({}))).chatbotId ?? "");
+    const db = getDb();
+    const bot = ref ? await db.resolveChatbot(ref.trim()) : null;
+    if (!bot) return json({ error: "Unknown chatbot" }, 404);
+    const tenant = await db.getTenantByChatbot(bot.id);
+    if (!tenant) return json({ error: "No tenant for chatbot" }, 404);
+    return json({
+      chatbotId: bot.id,
+      active: bot.active,
+      name: bot.name,
+      title: tenant.name || bot.name,
+      welcomeMessage: tenant.welcomeMessage,
+      subtitle: tenant.tone,
+      brandColour: tenant.brandColour,
+      storeUrl: tenant.storeUrl,
+    });
+  }
+
   // API: feedback
   if (url.pathname === "/feedback" && req.method === "POST") {
     try {
       const body = await req.json();
       const db = getDb();
-      await db.recordFeedback(String(body.conversationId ?? ""), Number(body.rating) === 1 ? 1 : -1, body.comment ? String(body.comment) : undefined);
+      await db.logFeedback({
+        conversationId: String(body.conversationId ?? ""),
+        rating: Number(body.rating) === 1 ? "up" : "down",
+        comment: body.comment ? String(body.comment) : undefined,
+        createdAt: new Date().toISOString(),
+      });
       return json({ ok: true });
     } catch (err) {
       return json({ error: err instanceof Error ? err.message : "Internal error" }, 500);

@@ -71,6 +71,7 @@ export interface OnboardingResult {
   tenantId: string;
   slug: string;
   chatbotId: string;
+  publicId: string;
   embedScript: string;
   next: string;
 }
@@ -107,6 +108,7 @@ export interface TenantConfig {
 
 export interface ChatbotInfo {
   id: string;
+  publicId: string | null;
   name: string;
   active: boolean;
   config: Record<string, unknown>;

@@ -115,7 +115,13 @@ const wizard = {
 const onb = await callFn("onboarding", token!, { body: wizard });
 ok("onboarding returns ok", onb.json?.ok === true, onb.json);
 ok("onboarding returns tenantId + slug", Boolean(onb.json?.tenantId && onb.json?.slug), onb.json);
-ok("onboarding returns embedScript", String(onb.json?.embedScript ?? "").includes("widget?tenant="), onb.json?.embedScript);
+ok("onboarding returns publicId", /^cb_[a-z0-9]{8}$/.test(String(onb.json?.publicId ?? "")), onb.json?.publicId);
+ok(
+  "onboarding embed uses public id",
+  String(onb.json?.embedScript ?? "").includes(`data-chatbot="${onb.json?.publicId}"`),
+  onb.json?.embedScript,
+);
+ok("onboarding embed hides internal Supabase URL", !String(onb.json?.embedScript ?? "").includes("supabase.co"), onb.json?.embedScript);
 const slug: string = onb.json?.slug;
 
 // ---- 3. Dashboard: overview ------------------------------------------------

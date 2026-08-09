@@ -1,52 +1,90 @@
 import { createRoot } from "react-dom/client";
 import { Widget, type WidgetConfig } from "./widget";
 
-// Embed bootstrap — the file WordPress loads as widget.js.
-//
-// Usage in any site (WordPress included):
-//   <script src="https://<your-cdn-or-supabase-storage>/widget.js"
-//           data-chatbot-id="ivy-pearls"
-//           data-api-url="https://<project-ref>.supabase.co/functions/v1"
-//           data-brand-colour="#9c7b4f"
-//           data-title="Ivy & Pearls"
-//           data-customer-email="optional@email.com"
-//           defer></script>
-//
-// The widget renders inside a Shadow DOM so the host site's CSS cannot
-// affect it, and its own styles cannot leak out.
-
-function readConfig(): WidgetConfig {
-  const s = document.currentScript as HTMLScriptElement | null;
-  const d = s?.dataset ?? {};
-  const apiUrl =
-    d.apiUrl ??
-    (s?.getAttribute("data-api-url") ?? "") ??
-    `${location.protocol}//${location.host}/functions/v1`;
-  return {
-    chatbotId: d.chatbotId ?? "ivy-pearls",
-    apiUrl,
-    brandColour: d.brandColour,
-    title: d.title,
-    subtitle: d.subtitle,
-    quickActions: d.quickActions?.split("|").map((x) => x.trim()),
-    customerEmail: d.customerEmail,
-  };
+interface PublicWidgetConfig {
+  chatbotId: string;
+  active: boolean;
+  name: string;
+  title: string;
+  welcomeMessage?: string | null;
+  subtitle?: string | null;
+  brandColour?: string | null;
+  storeUrl?: string | null;
 }
 
-function init() {
-  const config = readConfig();
+function scriptElement(): HTMLScriptElement | null {
+  return (
+    (document.currentScript as HTMLScriptElement | null) ??
+    document.querySelector<HTMLScriptElement>("script[data-chatbot]")
+  );
+}
+
+function apiBaseFromScript(script: HTMLScriptElement | null): string {
+  const explicit = script?.dataset.apiUrl ?? script?.getAttribute("data-api-url");
+  if (explicit) return explicit.replace(/\/+$/, "");
+
+  const src = script?.src;
+  if (!src) return `${location.origin}`;
+  const url = new URL(src, document.baseURI);
+  let path = url.pathname.replace(/\/+$/, "");
+  if (path.endsWith("/widget.js")) path = path.slice(0, -"/widget.js".length);
+  else if (path.endsWith("/widget")) path = path.slice(0, -"/widget".length);
+  return `${url.origin}${path}`.replace(/\/+$/, "");
+}
+
+async function loadConfig(apiBase: string, publicId: string): Promise<PublicWidgetConfig> {
+  const url = `${apiBase}/widget-config?chatbot=${encodeURIComponent(publicId)}`;
+  const response = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`Widget configuration failed (${response.status})`);
+  const config = (await response.json()) as PublicWidgetConfig;
+  if (!config.active || !config.chatbotId) throw new Error("This chatbot is not available");
+  return config;
+}
+
+function readPublicId(script: HTMLScriptElement | null): string {
+  return script?.dataset.chatbot ?? script?.getAttribute("data-chatbot") ?? "";
+}
+
+function init(script: HTMLScriptElement | null) {
+  const publicId = readPublicId(script);
+  if (!publicId) {
+    console.error("Chat widget requires data-chatbot");
+    return;
+  }
+
+  const apiUrl = apiBaseFromScript(script);
   const host = document.createElement("div");
-  host.id = `zochat-${config.chatbotId}`;
+  host.id = `zochat-${publicId}`;
   host.style.display = "contents";
   document.body.appendChild(host);
   const shadow = host.attachShadow({ mode: "open" });
   const mount = document.createElement("div");
   shadow.appendChild(mount);
-  createRoot(mount).render(<Widget config={config} />);
+
+  loadConfig(apiUrl, publicId)
+    .then((remote) => {
+      const data = script?.dataset ?? {};
+      const config: WidgetConfig = {
+        chatbotId: remote.chatbotId,
+        apiUrl,
+        brandColour: data.brandColour ?? remote.brandColour ?? undefined,
+        title: data.title ?? remote.title,
+        subtitle: data.subtitle ?? remote.subtitle ?? remote.welcomeMessage ?? undefined,
+        quickActions: data.quickActions?.split("|").map((x) => x.trim()),
+        customerEmail: data.customerEmail,
+      };
+      createRoot(mount).render(<Widget config={config} />);
+    })
+    .catch((error) => {
+      console.error(error);
+      mount.textContent = "The chat assistant is temporarily unavailable.";
+      mount.style.cssText = "position:fixed;bottom:24px;right:24px;padding:12px 16px;background:#fff;border:1px solid #e8e1d4;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.15);font:14px system-ui,sans-serif;color:#1f1a14;z-index:2147483000";
+    });
 }
 
+const bootScript = scriptElement();
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", init);
+  document.addEventListener("DOMContentLoaded", () => init(bootScript), { once: true });
 } else {
-  init();
+  init(bootScript);
 }

@@ -147,7 +147,7 @@ async function actionGetConfig(ctx: Awaited<ReturnType<typeof resolveDashboardCo
   if (!tenant) throw new DashboardError("Tenant not found", 404);
 
   const botRows = await getRows(c, "chatbots", {
-    select: "id,name,active,config",
+    select: "id,public_id,name,active,config",
     tenant_id: `eq.${ctx.tenantId}`,
   });
 
@@ -170,11 +170,16 @@ async function actionGetConfig(ctx: Awaited<ReturnType<typeof resolveDashboardCo
     },
     chatbots: botRows.map((b) => ({
       id: b.id,
+      publicId: typeof b.public_id === "string" ? b.public_id : null,
       name: b.name,
       active: b.active === true,
       config: (b.config ?? {}) as Record<string, unknown>,
     })),
-    embedScript: embedScript(String(tenant.slug)),
+    embedScript: embedScriptFor(
+      typeof botRows[0]?.public_id === "string" && botRows[0].public_id
+        ? botRows[0].public_id
+        : fallbackPublicId(botRows[0] ?? {}),
+    ),
   });
 }
 
