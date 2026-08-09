@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ivy & Pearls — Live Chatbot Widget</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #fdf6ec 0%, #f5ead6 100%);
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #3b2a1a;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 40px 48px;
+      box-shadow: 0 10px 40px rgba(156, 123, 79, 0.25);
+      text-align: center;
+      max-width: 560px;
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; color: #9c7b4f; }
+    p { margin: 4px 0; line-height: 1.5; }
+    .hint {
+      margin-top: 20px;
+      font-size: 14px;
+      color: #8a6d43;
+      background: #f8f1e4;
+      border-radius: 8px;
+      padding: 10px 14px;
+    }
+    .badge {
+      display: inline-block;
+      background: #2f8f5b;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 999px;
+      margin-bottom: 12px;
+      letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">● LIVE — agnes-ai / agnes-2.5-flash</div>
+    <h1>Ivy &amp; Pearls</h1>
+    <p>Hi! I can help you find jewellery, check an order, or recommend a gift.</p>
+    <p class="hint">
+      Click the chat bubble (bottom-right) and try:<br />
+      • “gold necklaces under £100”<br />
+      • “what’s your returns policy?”<br />
+      • “where is my order #4821? my email is amelia@example.com”<br />
+      • “what is the capital of France?” → should be refused
+    </p>
+  </div>
+
+  <!-- Live widget from the deployed Supabase function -->
+  <script src="https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/widget"
+          data-chatbot-id="ivy-pearls"
+          data-api-url="https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1"
+          data-brand-colour="#9c7b4f"
+          data-title="Ivy & Pearls"
+          data-subtitle="Ask us anything about our jewellery"
+          defer></script>
+</body>
+</html>

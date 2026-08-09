@@ -1,0 +1,28 @@
+project_id = "chatbot-system"
+
+[functions.chat]
+verify_jwt = false
+
+[functions.products]
+verify_jwt = false
+
+[functions.orders]
+verify_jwt = false
+
+[functions.knowledge]
+verify_jwt = false
+
+[functions.feedback]
+verify_jwt = false
+
+[functions.widget]
+verify_jwt = false
+
+[functions.widget-config]
+verify_jwt = false
+
+[functions.onboarding]
+verify_jwt = true
+
+[functions.dashboard]
+verify_jwt = true

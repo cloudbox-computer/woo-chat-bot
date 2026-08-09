@@ -1,0 +1,30 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "chatbot-system",
+      "devDependencies": {
+        "@types/deno": "^2.7.0",
+        "deno": "^2.9.5",
+      },
+    },
+  },
+  "packages": {
+    "@deno/darwin-arm64": ["@deno/darwin-arm64@2.9.5", "", { "os": "darwin", "cpu": "arm64" }, "sha512-SX98qSdBT1lw9x6NwGwx2xIayl1kRimdRnFohYlJ6nt3mLKzTKHHKQwQs5D2pEY7mbUGGbYe9brM2kfN75pPkg=="],
+
+    "@deno/darwin-x64": ["@deno/darwin-x64@2.9.5", "", { "os": "darwin", "cpu": "x64" }, "sha512-gbdlxWZuAZFiJiZtTT00Mv/aC7f/31+pyqJGQKlZr5X33WeTo5B0GG+efcX3P1UZceRKHuPEAQ1B/M2oRt8r9Q=="],
+
+    "@deno/linux-arm64-glibc": ["@deno/linux-arm64-glibc@2.9.5", "", { "os": "linux", "cpu": "arm64" }, "sha512-IuYjsz9PGl7CJcNXMuN27KNDB8Q40brK3SG3l+TXMDVW61ZKwcn0fQHBHnXFiiygEwI8by/fKnASEluhZB1atw=="],
+
+    "@deno/linux-x64-glibc": ["@deno/linux-x64-glibc@2.9.5", "", { "os": "linux", "cpu": "x64" }, "sha512-TDqcnoLe3jlgqYEQm7H7MK6q0JOth+o8iSZzknRODnVkJfPiNnjVn1M1Zc6vnp+ipkyb6Av1/CUlHgHtlq59Gw=="],
+
+    "@deno/win32-arm64": ["@deno/win32-arm64@2.9.5", "", { "os": "win32", "cpu": "arm64" }, "sha512-tTPrE/4SX7uaC8nJW47iNnibtjzk1y4zoiYjBBHE34vdkbb6LHopqH68BxyT61HZdfqXzOTEYjDVHhtmVZFy+w=="],
+
+    "@deno/win32-x64": ["@deno/win32-x64@2.9.5", "", { "os": "win32", "cpu": "x64" }, "sha512-LkcERsH0olOgevg9L9eootSr1U8ydyfnX1bS3mFqU+lGBeTYtlec5b/QF473WUOGVgPlWECrkxi4As5kEaFOzg=="],
+
+    "@types/deno": ["@types/deno@2.7.0", "", {}, "sha512-Y6fWcV8KpYeO3Lik/RiYnUxtr/LWqoeACciU0CA+dr1U/45tGgaX3HWQQAPCNN53raN4Rr4Fht4y6qsUH57fDA=="],
+
+    "deno": ["deno@2.9.5", "", { "optionalDependencies": { "@deno/darwin-arm64": "2.9.5", "@deno/darwin-x64": "2.9.5", "@deno/linux-arm64-glibc": "2.9.5", "@deno/linux-x64-glibc": "2.9.5", "@deno/win32-arm64": "2.9.5", "@deno/win32-x64": "2.9.5" }, "bin": { "deno": "bin.cjs" } }, "sha512-Jt/AcJiErtUW9krGwlwUDsm1coNtmfthiQ4JtSCF+JNkqohbeiJoRVkCr4FA4WQstyHuSJaON6PHCin0UCtlLg=="],
+  }
+}
