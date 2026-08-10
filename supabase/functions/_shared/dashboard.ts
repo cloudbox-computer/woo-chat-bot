@@ -23,9 +23,11 @@ export function embedScriptFor(publicId: string): string {
   if (!id) throw new Error("A public chatbot id is required");
 
   const configured = env("WIDGET_BASE_URL")?.trim();
+  const apiBase = env("WIDGET_API_BASE_URL")?.trim();
   if (configured) {
-    const src = configured.replace(/\/+$/, "");
-    return `<!-- ChatWidget -->\n<script async src="${src}" data-chatbot="${id}"></script>`;
+    const src = configured.replace(/\/+$/g, "");
+    const apiAttr = apiBase ? ` data-api-url="${apiBase.replace(/\/+$/g, "")}"` : "";
+    return `<!-- ChatWidget -->\n<script async src="${src}" data-chatbot="${id}"${apiAttr}></script>`;
   }
 
   throw new Error("WIDGET_BASE_URL is required to generate a public embed snippet");

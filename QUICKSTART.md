@@ -88,7 +88,8 @@ Set `WIDGET_BASE_URL` to the public branded widget URL, such as `https://chat.yo
 <script async src="https://chat.yourdomain.com/widget.js" data-chatbot="cb_7f82k91"></script>
 ```
 
-The `cb_...` value is an opaque public chatbot id. The customer-facing snippet must not contain a Supabase URL, `data-chatbot-id`, `data-api-url` or `?tenant=...`.
+The `cb_...` value is an opaque public chatbot id. The customer-facing snippet must not contain a Supabase URL, `data-chatbot-id`, or `?tenant=...`.
+If the widget asset and API backend are deployed to different hosts, set `WIDGET_API_BASE_URL` so the generated snippet also includes `data-api-url`.
 
 That's it — no plugin needed to start. Full table of what customers can ask:
 see `docs/wordpress-integration.md`.

@@ -80,7 +80,12 @@ async function handle(req: Request): Promise<Response> {
 
   // Static: demo page + built widget
   const path = url.pathname === "/" ? "/index.html" : url.pathname;
-  const file = Bun.file(WIDGET + path);
+  let file = Bun.file(WIDGET + path);
+
+  if (path === "/widget.js") {
+    file = Bun.file(WIDGET + "/dist/widget.js");
+  }
+
   if (await file.exists()) {
     const ext = path.slice(path.lastIndexOf("."));
     return new Response(file, { headers: { "Content-Type": MIME[ext] ?? "application/octet-stream" } });

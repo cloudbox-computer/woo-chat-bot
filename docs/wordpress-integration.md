@@ -4,9 +4,9 @@ Add the chatbot to the store with one script tag. The customer-facing snippet us
 
 ## 1. One-time: deploy the backend
 
-Deploy the widget and API behind your branded public host, for example `https://chat.yourdomain.com/widget.js`. Set `WIDGET_BASE_URL=https://chat.yourdomain.com/widget.js` in the Edge Function environment. The onboarding wizard and dashboard then generate the correct tenant-specific snippet.
+Deploy the widget and API behind your branded public host, for example `https://chat.yourdomain.com/widget.js`. Set `WIDGET_BASE_URL=https://chat.yourdomain.com/widget.js` in the Edge Function environment. If your widget asset and backend API are on different hosts, also set `WIDGET_API_BASE_URL=https://api.yourdomain.com/functions/v1`.
 
-Supabase can remain the implementation layer behind that host; it should not appear in the customer-facing installation code.
+The onboarding wizard and dashboard then generate the correct tenant-specific snippet. Supabase can remain the implementation layer behind that host; it should not appear in the customer-facing installation code.
 
 ## 2. Add the widget to WordPress
 
