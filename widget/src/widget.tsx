@@ -104,7 +104,15 @@ export function Widget({ config }: { config: WidgetConfig }) {
       if (!res.ok) throw new Error(`chat failed: ${res.status}`);
       const data = (await res.json()) as ChatApiResponse;
       setConversationId(data.conversationId);
-      setMessages((m) => [...m, { role: "assistant", content: data.reply, products: data.products }]);
+      // Debug guard: server should return a normal assistant reply. If we
+      // unexpectedly receive a tool marker or an empty reply, log it and
+      // show a friendly fallback so users don't see raw tool strings.
+      let assistantContent = data.reply ?? "";
+      if (!assistantContent || assistantContent.startsWith("tool:")) {
+        console.warn("Unexpected assistant reply from /chat:", data);
+        assistantContent = "Sorry — I couldn't form a reply from the assistant. Please try again.";
+      }
+      setMessages((m) => [...m, { role: "assistant", content: assistantContent, products: data.products }]);
     } catch (e) {
       setMessages((m) => [...m, { role: "assistant", content: "Sorry — I couldn't reach the assistant right now. Please try again in a moment.", error: true }]);
       console.error(e);
@@ -180,38 +188,78 @@ export function Widget({ config }: { config: WidgetConfig }) {
                 {config.subtitle ?? "Hi! How can I help you today?"}
               </div>
             )}
-            {messages.map((m, i) => (
-              <div key={i}>
-                <div style={{ ...s.bubble, ...(m.role === "user" ? s.user : m.error ? s.error : s.assistant) }}>
-                  {m.content}
-                </div>
-                {m.products?.map((p) => (
-                  <div key={String(p.id)} style={s.card}>
-                    {p.imageUrl ? <img src={p.imageUrl} alt={p.name} style={s.cardImg} /> : null}
-                    <div style={{ flex: 1 }}>
-                      <p style={s.cardName}>{p.name}</p>
-                      <p style={s.cardPrice}>{sym(p.currency)}{p.price.toFixed(2)}</p>
-                      <div style={s.cardActions}>
-                        <button
-                          style={s.cardBtn}
-                          onClick={() => send(`Add ${p.name} (product ${p.id}) to my cart`)}
-                        >
-                          Add to cart
-                        </button>
-                        {p.url ? <a style={s.cardLink} href={p.url} target="_blank" rel="noreferrer">View →</a> : null}
-                      </div>
+            {(() => {
+              const nodes: React.ReactNode[] = [];
+              for (let i = 0; i < messages.length; i++) {
+                const m = messages[i];
+
+                // Detect assistant tool invocation markers of the form:
+                //   tool:NAME:JSON
+                if (m.role === "assistant" && typeof m.content === "string" && m.content.startsWith("tool:")) {
+                  const payload = m.content.slice("tool:".length);
+                  const colon = payload.indexOf(":");
+                  const toolName = colon === -1 ? payload : payload.slice(0, colon);
+                  let args: any = {};
+                  if (colon !== -1) {
+                    try {
+                      args = JSON.parse(payload.slice(colon + 1));
+                    } catch {
+                      args = {};
+                    }
+                  }
+
+                  // The next message is expected to be the tool output (role: user)
+                  const next = messages[i + 1];
+                  const toolOutput = next && next.role === "user" ? next.content : undefined;
+
+                  nodes.push(
+                    <div key={`tool-${i}`} style={s.card}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>{toolName}</div>
+                      <div style={{ marginTop: 8, color: COLORS.muted, fontSize: 13 }}>{JSON.stringify(args)}</div>
+                      <div style={{ marginTop: 10 }}>{toolOutput ?? "(no result)"}</div>
+                    </div>,
+                  );
+
+                  if (next && next.role === "user") i++; // skip the tool output message, we've shown it
+                  continue;
+                }
+
+                // Normal message
+                nodes.push(
+                  <div key={i}>
+                    <div style={{ ...s.bubble, ...(m.role === "user" ? s.user : m.error ? s.error : s.assistant) }}>
+                      {m.content}
                     </div>
-                  </div>
-                ))}
-                {m.role === "assistant" && conversationId && !m.error && (
-                  <div style={s.feedback}>
-                    Was this helpful?
-                    <button style={s.feedbackBtn} onClick={() => sendFeedback(1)} aria-label="Helpful">👍</button>
-                    <button style={s.feedbackBtn} onClick={() => sendFeedback(-1)} aria-label="Not helpful">👎</button>
-                  </div>
-                )}
-              </div>
-            ))}
+                    {m.products?.map((p) => (
+                      <div key={String(p.id)} style={s.card}>
+                        {p.imageUrl ? <img src={p.imageUrl} alt={p.name} style={s.cardImg} /> : null}
+                        <div style={{ flex: 1 }}>
+                          <p style={s.cardName}>{p.name}</p>
+                          <p style={s.cardPrice}>{sym(p.currency)}{p.price.toFixed(2)}</p>
+                          <div style={s.cardActions}>
+                            <button
+                              style={s.cardBtn}
+                              onClick={() => send(`Add ${p.name} (product ${p.id}) to my cart`)}
+                            >
+                              Add to cart
+                            </button>
+                            {p.url ? <a style={s.cardLink} href={p.url} target="_blank" rel="noreferrer">View →</a> : null}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {m.role === "assistant" && conversationId && !m.error && (
+                      <div style={s.feedback}>
+                        Was this helpful?
+                        <button style={s.feedbackBtn} onClick={() => sendFeedback(1)} aria-label="Helpful">👍</button>
+                        <button style={s.feedbackBtn} onClick={() => sendFeedback(-1)} aria-label="Not helpful">👎</button>
+                      </div>
+                    )}
+                  </div>,
+                );
+              }
+              return nodes;
+            })()}
             {loading && (
               <div style={{ ...s.bubble, ...s.assistant, ...s.typing }}>
                 <span className="zochat-dot" style={s.dot} />
