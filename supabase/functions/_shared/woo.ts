@@ -85,7 +85,7 @@ export class WooCommerceClient implements WooClient {
   }
 
   private async get<T>(path: string, qs: Record<string, string> = {}): Promise<T> {
-    const res = await fetch(`${this.base}${path}?${new URLSearchParams(qs)}`, {
+    const res = await fetch(`${this.base}/${path}?${new URLSearchParams(qs)}`, {
       headers: { Authorization: this.auth },
     });
     if (!res.ok) throw new Error(`WooCommerce ${res.status}: ${await res.text()}`);
@@ -93,7 +93,7 @@ export class WooCommerceClient implements WooClient {
   }
 
   private async send<T>(method: string, path: string, body: Record<string, unknown>): Promise<T> {
-    const res = await fetch(`${this.base}${path}`, {
+    const res = await fetch(`${this.base}/${path}`, {
       method,
       headers: { Authorization: this.auth, "Content-Type": "application/json" },
       body: JSON.stringify(body),

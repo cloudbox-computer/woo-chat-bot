@@ -16,7 +16,8 @@ Deno.serve(async (req: Request) => {
     if (!chatbotId) return json({ error: "chatbotId is required" }, 400);
 
     const db = getDb();
-    const tenant = await db.getTenantByChatbot(chatbotId);
+    const bot = await db.resolveChatbot(chatbotId);
+    const tenant = bot ? await db.getTenantByChatbot(bot.id) : null;
     if (!tenant) return json({ error: "No tenant for chatbot" }, 404);
 
     const orders: Order[] = await wooClientFor(tenant).trackOrder({

@@ -12,22 +12,23 @@ import type { Tenant } from "./types.ts";
  *
  * WIDGET_BASE_URL is the public widget URL, for example
  * "https://chat.yourdomain.com/widget.js". The snippet carries only the
- * opaque public chatbot id — never the internal slug or tenant id.
+ * opaque public chatbot id — never the internal slug, tenant id, or any
+ * Supabase URL.
  *
- * The Supabase fallback is retained for development/backwards compatibility;
- * production deployments should set WIDGET_BASE_URL so customer-facing
- * installation code uses the branded chat domain.
+ * The widget host (e.g. Netlify) proxies the API routes the widget calls
+ * directly (`/widget-config`, `/chat`, `/feedback`) to the Supabase edge
+ * functions via its `_redirects`/reverse-proxy config, so the snippet NEVER
+ * includes a `data-api-url` attribute. The widget resolves its API base from
+ * the script's own origin.
  */
 export function embedScriptFor(publicId: string): string {
   const id = publicId.trim();
   if (!id) throw new Error("A public chatbot id is required");
 
   const configured = env("WIDGET_BASE_URL")?.trim();
-  const apiBase = env("WIDGET_API_BASE_URL")?.trim();
   if (configured) {
     const src = configured.replace(/\/+$/g, "");
-    const apiAttr = apiBase ? ` data-api-url="${apiBase.replace(/\/+$/g, "")}"` : "";
-    return `<!-- ChatWidget -->\n<script async src="${src}" data-chatbot="${id}"${apiAttr}></script>`;
+    return `<!-- ChatWidget -->\n<script async src="${src}" data-chatbot="${id}"></script>`;
   }
 
   throw new Error("WIDGET_BASE_URL is required to generate a public embed snippet");

@@ -147,7 +147,10 @@ const OFF_TOPIC_PATTERNS: RegExp[] = [
   // entertainment
   /\b(movie|movies|film|films|song|songs|music|celebrity|actor|actress|netflix|spotify|video game|gaming)\b/i,
   // general knowledge / homework / lifestyle
-  /\b(capital of|history of|homework|essay|recipe|recipes|how to cook|cooking|baking|travel tips|tourism|horoscope|astrology)\b/i,
+  // (NOTE: "cooking"/"baking" are deliberately NOT here — they appear in
+  // legitimate jewellery care advice, e.g. "remove your rings before cooking".
+  // The topic allowlist still fails closed on truly off-topic requests.)
+  /\b(capital of|history of|homework|essay|recipe|recipes|how to cook|travel tips|tourism|horoscope|astrology)\b/i,
   // famous people / other companies (avoid apple/google clash with Pay)
   /\b(elon|musk|bill gates|steve jobs|mark zuckerberg|donald trump|obama|trump|tesla|microsoft|amazon|netflix|facebook|whatsapp)\b/i,
   // meta / assistant-identity probes
@@ -327,7 +330,22 @@ const LEAK_RE =
 /** Other tenants the model must never mention in another tenant's reply. */
 const OTHER_TENANT_NAMES = ["ntm associates", "ntm-associates", "ivy & pearls", "ivy and pearls"];
 
-export function checkOutputGate(reply: string, tenant: Tenant, policy: TenantPolicy): GateResult {
+/**
+ * Gate 5 — output gate (response validator).
+ *
+ * productNames: names of products the agent actually retrieved from the
+ * tenant's own catalogue via tools. When the reply references one of them,
+ * the fuzzy OFF_TOPIC heuristic is skipped, because a legitimate product
+ * name can legitimately contain an off-topic keyword (e.g. a "Tennis
+ * Bracelet" colliding with the sports keyword). Leak and cross-tenant
+ * checks above remain absolute and always apply.
+ */
+export function checkOutputGate(
+  reply: string,
+  tenant: Tenant,
+  policy: TenantPolicy,
+  productNames: string[] = [],
+): GateResult {
   const r = reply.trim();
   if (!r) return { allowed: false, reason: "empty" };
 
@@ -340,9 +358,19 @@ export function checkOutputGate(reply: string, tenant: Tenant, policy: TenantPol
     if (n !== self && low.includes(n)) return { allowed: false, reason: "cross-tenant" };
   }
 
+  const mentionsOwnProduct = productNames.some((name) => {
+    const n = (name ?? "").toLowerCase();
+    if (!n) return false;
+    if (low.includes(n)) return true;
+    // Fall back to any distinctive (>=5 char) word in the product name, so we
+    // still catch replies that paraphrase or partially quote the name.
+    const words = n.split(/[^a-z0-9]+/).filter((w) => w.length >= 5);
+    return words.some((w) => low.includes(w));
+  });
+
   // If the model produced an obviously off-topic reply (went off the rails),
   // discard it and fall back to the fixed refusal.
-  if (OFF_TOPIC_PATTERNS.some((p) => p.test(r))) {
+  if (!mentionsOwnProduct && OFF_TOPIC_PATTERNS.some((p) => p.test(r))) {
     return { allowed: false, reason: "off-topic" };
   }
 

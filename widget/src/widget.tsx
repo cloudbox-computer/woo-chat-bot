@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Markdown } from "./Markdown";
 
 export interface WidgetConfig {
   chatbotId: string;
@@ -59,6 +60,22 @@ function sym(currency?: string): string {
   if (currency === "USD") return "$";
   if (currency === "EUR") return "€";
   return currency ? `${currency} ` : "£";
+}
+
+/**
+ * True when the assistant's text reply is itself the catalogue listing
+ * (it names most of the returned products). In that case the product cards
+ * below already show name + price, so we hide the redundant text and render
+ * the cards only.
+ */
+function isProductListing(content: string, products?: Product[]): boolean {
+  if (!products?.length || !content) return false;
+  const lower = content.toLowerCase();
+  let matched = 0;
+  for (const p of products) {
+    if (p.name && lower.includes(p.name.toLowerCase())) matched++;
+  }
+  return matched >= 2 && matched >= Math.ceil(products.length / 2);
 }
 
 export function mountWidget(el: HTMLElement, config: WidgetConfig) {
@@ -145,10 +162,10 @@ export function Widget({ config }: { config: WidgetConfig }) {
     subtitle: { margin: "2px 0 0", fontSize: 12, opacity: 0.9 },
     close: { background: "transparent", border: "none", color: "#fff", cursor: "pointer", fontSize: 18, padding: 4 },
     body: { flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10, background: "#faf8f4" },
-    bubble: { maxWidth: "82%", padding: "10px 13px", borderRadius: 14, fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word" },
-    user: { background: brand, color: "#fff", alignSelf: "flex-end", borderBottomRightRadius: 4 },
+    bubble: { maxWidth: "82%", padding: "10px 13px", borderRadius: 14, fontSize: 14, lineHeight: 1.45, wordBreak: "break-word" },
+    user: { background: brand, color: "#fff", alignSelf: "flex-end", borderBottomRightRadius: 4, whiteSpace: "pre-wrap" },
     assistant: { background: COLORS.assistantBubble, color: COLORS.fg, alignSelf: "flex-start", borderBottomLeftRadius: 4 },
-    error: { background: "#fdecea", color: COLORS.danger },
+    error: { background: "#fdecea", color: COLORS.danger, whiteSpace: "pre-wrap" },
     card: { background: "#fff", border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 10, display: "flex", gap: 10, maxWidth: "82%", alignSelf: "flex-start" },
     cardImg: { width: 52, height: 52, borderRadius: 8, objectFit: "cover", background: "#f0ebe0", flexShrink: 0 },
     cardName: { fontSize: 13, fontWeight: 600, color: COLORS.fg, margin: 0 },
@@ -172,6 +189,29 @@ export function Widget({ config }: { config: WidgetConfig }) {
       <style>{`
         @keyframes zochatPulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }
         .zochat-dot:nth-child(2) { animation-delay: .2s } .zochat-dot:nth-child(3) { animation-delay: .4s }
+        .zochat-md { font-size: 14px; line-height: 1.5; word-break: break-word; }
+        .zochat-md > :first-child { margin-top: 0; }
+        .zochat-md > :last-child { margin-bottom: 0; }
+        .zochat-md p { margin: 0 0 8px; }
+        .zochat-md h1, .zochat-md h2, .zochat-md h3, .zochat-md h4, .zochat-md h5, .zochat-md h6 { margin: 10px 0 6px; font-weight: 700; line-height: 1.3; }
+        .zochat-md h1 { font-size: 16px; } .zochat-md h2 { font-size: 15px; } .zochat-md h3 { font-size: 14px; }
+        .zochat-md ul, .zochat-md ol { margin: 0 0 8px; padding-left: 20px; }
+        .zochat-md li { margin: 2px 0; }
+        .zochat-md a { color: ${brand}; text-decoration: underline; }
+        .zochat-md strong { font-weight: 700; }
+        .zochat-md em { font-style: italic; }
+        .zochat-md del { color: ${COLORS.muted}; }
+        .zochat-md code { background: rgba(0,0,0,.06); border-radius: 4px; padding: 1px 4px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+        .zochat-md pre { background: #f0ebe0; border-radius: 8px; padding: 8px 10px; overflow-x: auto; margin: 0 0 8px; }
+        .zochat-md pre code { background: none; padding: 0; font-size: 12px; }
+        .zochat-md blockquote { border-left: 3px solid #d8cfc0; margin: 0 0 8px; padding: 2px 0 2px 10px; color: ${COLORS.muted}; }
+        .zochat-md table { border-collapse: collapse; width: 100%; margin: 0 0 8px; font-size: 13px; }
+        .zochat-md th, .zochat-md td { border: 1px solid #e8e1d4; padding: 5px 8px; text-align: left; }
+        .zochat-md th { background: #f5f0e6; font-weight: 700; }
+        .zochat-md tr:nth-child(even) td { background: #faf8f4; }
+        .zochat-md hr { border: none; border-top: 1px solid #e8e1d4; margin: 10px 0; }
+        .zochat-md input[type="checkbox"] { margin-right: 6px; }
+        .zochat-md img { max-width: 100%; border-radius: 8px; }
       `}</style>
       {open && (
         <div style={s.panel}>
@@ -224,12 +264,21 @@ export function Widget({ config }: { config: WidgetConfig }) {
                   continue;
                 }
 
-                // Normal message
+                // Normal message. When the reply is itself the catalogue
+                // listing, the product cards below already show name + price,
+                // so we render the cards only (no duplicate text bubble).
+                const productListing = m.role === "assistant" && isProductListing(m.content, m.products);
                 nodes.push(
                   <div key={i}>
-                    <div style={{ ...s.bubble, ...(m.role === "user" ? s.user : m.error ? s.error : s.assistant) }}>
-                      {m.content}
-                    </div>
+                    {m.role === "assistant" ? (
+                      !productListing && (
+                        <div style={{ ...s.bubble, ...(m.error ? s.error : s.assistant) }}>
+                          <Markdown>{m.content}</Markdown>
+                        </div>
+                      )
+                    ) : (
+                      <div style={{ ...s.bubble, ...s.user }}>{m.content}</div>
+                    )}
                     {m.products?.map((p) => (
                       <div key={String(p.id)} style={s.card}>
                         {p.imageUrl ? <img src={p.imageUrl} alt={p.name} style={s.cardImg} /> : null}

@@ -97,6 +97,24 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     type: "function",
     function: {
+      name: "search_website",
+      description:
+        "Search the store's OWN website (WordPress) for information not covered by the knowledge base: delivery times, returns policy, care & cleaning guides, size guide, FAQ, contact details. Use when the knowledge base has no answer for a store question. This tool can only ever access the store's own website.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search terms, e.g. 'delivery times' or 'returns policy'" },
+          path: {
+            type: "string",
+            description: "Optional known page path on the store website, e.g. '/returns/' or '/delivery/'. Use instead of query when you know the exact page.",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "track_order",
       description:
         "Look up an order by order number and the email used at checkout. Use when the customer asks where their order is. Never guess a status.",
@@ -303,8 +321,12 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
   get_product: "read",
   recommend_products: "read",
   search_knowledge: "read",
+  search_website: "read",
   check_ticket_status: "read",
-  track_order: "sensitive",
+  // Read-only lookup (order number + billing email verify ownership); never mutates.
+  // Classified at "support" so every chatbot (default permissions include support)
+  // can offer order tracking. Mutating order tools stay "sensitive" and are gated off.
+  track_order: "support",
   add_to_cart: "cart",
   view_cart: "cart",
   create_checkout: "cart",
@@ -367,6 +389,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       const items = await ctx.db.getKnowledge(ctx.chatbotId, asStr(args.query) ?? "");
       if (!items.length) return { ok: false, text: "No knowledge base match." };
       return { ok: true, text: items.map((k) => `${k.title}\n${k.content}`).join("\n\n") };
+    }
+    case "search_website": {
+      return await searchTenantWebsite(ctx.tenant, { query: asStr(args.query), path: asStr(args.path) });
     }
     case "add_to_cart": {
       const productId = args.productId as string | number;
@@ -566,6 +591,227 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
     default:
       return { ok: false, text: `Unknown tool: ${name}` };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Tenant website search (search_website tool) — SSRF-safe.
+//
+// Lets the AI find store info that isn't in the knowledge base (delivery
+// times, returns policy, care guides, FAQ, size guide…) by searching the
+// tenant's OWN website. Hard constraints so it can never reach anywhere else:
+//   * Base URL comes from the tenant's integrations (server-side only), never
+//     from the AI.
+//   * The AI supplies only search terms OR a RELATIVE page path.
+//   * Every outbound URL is re-validated: tenant host (or subdomain) only,
+//     http(s) only, no private/reserved hosts, and redirects re-checked.
+//   * Reads are time-boxed and size-capped.
+// ---------------------------------------------------------------------------
+
+const WEBSITE_TIMEOUT_MS = 8000;
+const WEBSITE_MAX_TEXT = 20000; // chars of extracted text kept per page
+
+function isPublicWebHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]") return false;
+  if (/^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
+  if (/\.(local|internal|lan)$/.test(h)) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return false; // bare IPv4 literal
+  return true;
+}
+
+function isSameSiteOrSubdomain(candidate: URL, base: URL): boolean {
+  const baseHost = base.hostname.toLowerCase().replace(/^www\./, "");
+  const candHost = candidate.hostname.toLowerCase().replace(/^www\./, "");
+  return candHost === baseHost || candHost.endsWith("." + baseHost);
+}
+
+// Stop-words / question-framing words stripped before a WP search, because
+// WordPress REST search matches keywords, not full sentences.
+const WEBSITE_STOP_WORDS = new Set([
+  "how", "what", "whats", "where", "when", "why", "which", "who", "whom",
+  "does", "do", "did", "is", "are", "was", "were", "be", "been", "being",
+  "can", "could", "would", "should", "will", "shall", "may", "might", "must",
+  "the", "a", "an", "and", "or", "but", "if", "of", "to", "for", "with",
+  "on", "in", "at", "by", "from", "as", "about", "into", "over", "under",
+  "your", "you", "my", "me", "i", "we", "our", "us", "they", "them", "it",
+  "its", "this", "that", "these", "those", "have", "has", "had", "not", "no",
+  "any", "all", "please", "tell", "give", "show", "need", "looking",
+  "long", "much", "many", "available", "currently",
+]);
+
+function extractSearchKeywords(query: string): string {
+  const words = query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !WEBSITE_STOP_WORDS.has(w) && !/^\d+$/.test(w));
+  return words.slice(0, 6).join(" ");
+}
+
+function tenantWebsiteBase(tenant: Tenant): URL | null {
+  const raw = tenant.wooUrl || tenant.storeUrl;
+  if (!raw) return null;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  if (!isPublicWebHost(u.hostname)) return null;
+  return u;
+}
+
+function stripHtmlToText(html: string): string {
+  let s = html;
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, " ");
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, " ");
+  s = s.replace(/<noscript[\s\S]*?<\/noscript>/gi, " ");
+  s = s.replace(/<svg[\s\S]*?<\/svg>/gi, " ");
+  s = s.replace(/<(header|footer|nav|aside)[\s\S]*?<\/\1>/gi, " ");
+  s = s.replace(/<br\s*\/?>/gi, "\n");
+  s = s.replace(/<\/(p|div|li|h1|h2|h3|h4|h5|h6|tr|table|section|article|ul|ol)>/gi, "\n");
+  s = s.replace(/<li[^>]*>/gi, "- ");
+  s = s.replace(/<(th|td)[^>]*>/gi, " | ");
+  s = s.replace(/<[^>]+>/g, " ");
+  s = s.replace(/&nbsp;/g, " ")
+    .replace(/&amp;|&#038;/g, "&")
+    .replace(/&#0?39;|&rsquo;|&lsquo;/g, "'")
+    .replace(/&ndash;|&#8211;/g, "-")
+    .replace(/&mdash;|&#8212;/g, "—")
+    .replace(/&pound;/g, "£")
+    .replace(/&ldquo;|&rdquo;|&quot;/g, '"')
+    .replace(/&#x2F;|&#47;/gi, "/");
+  s = s.replace(/\s+/g, " ").trim();
+  s = s.replace(/\n[ \t]+/g, "\n").replace(/\n{3,}/g, "\n\n");
+  return s;
+}
+
+async function fetchTenantText(url: URL, base: URL): Promise<string | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), WEBSITE_TIMEOUT_MS);
+  try {
+    const res = await fetch(url.toString(), {
+      signal: ctrl.signal,
+      redirect: "follow",
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; StoreSupportBot/1.0)" },
+    });
+    if (!res.ok) return null;
+    // Re-check the final URL after redirects stayed on the tenant's site.
+    let finalHost: string;
+    try {
+      finalHost = new URL(res.url || url.toString()).hostname;
+    } catch {
+      return null;
+    }
+    const baseHost = base.hostname.toLowerCase().replace(/^www\./, "");
+    const h = finalHost.toLowerCase().replace(/^www\./, "");
+    if (h !== baseHost && !h.endsWith("." + baseHost)) return null;
+    const html = await res.text();
+    return stripHtmlToText(html);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function searchTenantWebsite(
+  tenant: Tenant,
+  args: { query?: string; path?: string },
+  opts: { limit?: number } = {},
+): Promise<ToolResult> {
+  const base = tenantWebsiteBase(tenant);
+  if (!base) return { ok: false, text: "No website is configured for this store." };
+
+  const path = (args.path ?? "").trim();
+  if (path) {
+    if (!path.startsWith("/") || path.includes("//") || path.split("/").includes("..")) {
+      return { ok: false, text: "That page path isn't valid. Use a path like '/returns/'." };
+    }
+    const target = new URL(base);
+    target.pathname = path;
+    target.search = "";
+    target.hash = "";
+    if (!isSameSiteOrSubdomain(target, base)) {
+      return { ok: false, text: "Blocked: that page is outside the store's website." };
+    }
+    const text = await fetchTenantText(target, base);
+    if (!text) return { ok: false, text: "Couldn't read that page on the store's website." };
+    return { ok: true, text: text.slice(0, WEBSITE_MAX_TEXT) };
+  }
+
+  const query = (args.query ?? "").trim();
+  if (!query) {
+    return {
+      ok: false,
+      text: "Please give me a search term (e.g. 'delivery times') or a page path (e.g. '/returns/').",
+    };
+  }
+
+  // WordPress REST search matches keywords, not full sentences. Build a list
+  // of candidate search terms from least- to most-aggressive and try them in
+  // order until we get hits:
+  //   1. extracted keywords (stop-words stripped)   e.g. "deliver internationally"
+  //   2. the raw query as-is                        e.g. "Do you deliver internationally?"
+  //   3. just the first meaningful keyword          e.g. "deliver"
+  const keywords = extractSearchKeywords(query);
+  const candidateTerms = [keywords, query];
+  if (keywords && keywords !== query) {
+    const first = keywords.split(" ")[0];
+    if (first && first !== keywords) candidateTerms.push(first);
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), WEBSITE_TIMEOUT_MS);
+  let hits: Array<{ url: string; title: string }> = [];
+  let usedTerm = query;
+  try {
+    for (const term of candidateTerms) {
+      const searchUrl = new URL(base);
+      searchUrl.pathname = "/wp-json/wp/v2/search";
+      searchUrl.search = new URLSearchParams({ search: term, per_page: "5", subtype: "post,page" }).toString();
+      const res = await fetch(searchUrl.toString(), { signal: ctrl.signal });
+      if (res.ok) {
+        const j = (await res.json()) as Array<Record<string, unknown>>;
+        if (Array.isArray(j) && j.length) {
+          hits = j
+            .filter((x) => typeof x?.url === "string" && typeof x?.title === "string")
+            .map((x) => ({ url: x.url as string, title: x.title as string }));
+          usedTerm = term;
+          break;
+        }
+      }
+    }
+  } catch {
+    // fall through — no search results
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!hits.length) {
+    return { ok: false, text: `Nothing found on the store's website for "${query}".` };
+  }
+
+  const chunks: string[] = [];
+  for (const hit of hits.slice(0, opts.limit ?? 3)) {
+    let u: URL;
+    try {
+      u = new URL(hit.url, base);
+    } catch {
+      continue;
+    }
+    if (!isSameSiteOrSubdomain(u, base)) continue;
+    const text = await fetchTenantText(u, base);
+    if (text) {
+      chunks.push(`## ${stripHtmlToText(hit.title)} (${u.toString()})\n${text.slice(0, WEBSITE_MAX_TEXT)}`);
+    }
+  }
+
+  if (!chunks.length) {
+    return { ok: false, text: `Couldn't read any matching pages on the store's website for "${query}".` };
+  }
+  return { ok: true, text: chunks.join("\n\n---\n\n") };
 }
 
 // ---------------------------------------------------------------------------

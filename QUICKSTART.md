@@ -89,7 +89,7 @@ Set `WIDGET_BASE_URL` to the public branded widget URL, such as `https://chat.yo
 ```
 
 The `cb_...` value is an opaque public chatbot id. The customer-facing snippet must not contain a Supabase URL, `data-chatbot-id`, or `?tenant=...`.
-If the widget asset and API backend are deployed to different hosts, set `WIDGET_API_BASE_URL` so the generated snippet also includes `data-api-url`.
+The widget host (e.g. Netlify) proxies the API routes the widget calls directly — `/widget-config`, `/chat`, `/feedback` — to the Supabase edge functions (see `widget/public/_redirects`), so the generated snippet stays minimal and never includes a `data-api-url` attribute.
 
 That's it — no plugin needed to start. Full table of what customers can ask:
 see `docs/wordpress-integration.md`.

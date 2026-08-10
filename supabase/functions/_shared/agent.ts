@@ -10,11 +10,18 @@ import {
   checkTopicGate,
   refusalReply,
 } from "./policy.ts";
-import { executeTool, summarizeProducts, TOOL_SPECS, TOOL_PERMISSIONS } from "./tools.ts";
+import { executeTool, searchTenantWebsite, summarizeProducts, TOOL_SPECS, TOOL_PERMISSIONS } from "./tools.ts";
 import type { ChatRequest, ChatResponse, Product, Tenant, TenantPolicy, ToolPermission } from "./types.ts";
 import { DEFAULT_CHATBOT_PERMISSIONS } from "./types.ts";
 
 export const MAX_TOOL_TURNS = 6;
+
+// Questions about store policies / store info that are best answered from the
+// tenant's own website (delivery, returns, care, size guide, FAQ, contact…).
+// When a message matches, seedKnowledge also pulls the tenant's website so the
+// model always has real, current data — deterministic and multi-tenant safe.
+const STORE_INFO_QUERY_RE =
+  /\b(delivery|shipping|dispatch|postage|tracking|return|refund|exchange|cancel|care|cleaning|clean|tarnish|polish|size guide|sizing|warranty|guarantee|faq|contact|payment|terms|policy|how long|estimated arrival|delivered)\b/i;
 
 interface TranscriptEntry {
   role: "user" | "assistant";
@@ -122,11 +129,12 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   }
   transcript.push({ role: "user", content: req.message });
 
-  const knowledgeContext = await seedKnowledge(db, chatbotId, req.message);
+  const knowledgeContext = await seedKnowledge(db, tenant, chatbotId, req.message);
 
   let finalContent = "";
   let products: Product[] = [];
   let toolTurns = 0;
+  let echoRecoveries = 0;
 
   for (;;) {
     const last = transcript[transcript.length - 1];
@@ -139,28 +147,50 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
       knowledgeContext: toolTurns === 0 ? knowledgeContext : undefined,
     });
 
-    if (result.toolCalls.length === 0) {
-      finalContent = result.content ?? fallbackReply(products);
-      break;
+    // The model emitted a real tool call — execute it and loop for the reply.
+    if (result.toolCalls.length > 0) {
+      toolTurns++;
+      if (toolTurns > MAX_TOOL_TURNS) {
+        finalContent =
+          "I've gathered a lot of information — could you confirm the last detail so I can give you a precise answer?";
+        break;
+      }
+
+      const ctx = { tenant, chatbotId, conversationId, db, allowed };
+      for (const call of result.toolCalls) {
+        const toolResult = await executeTool(call.name, call.arguments, ctx);
+        transcript.push({
+          role: "assistant",
+          content: `tool:${call.name}:${JSON.stringify(call.arguments ?? {})}`,
+        });
+        transcript.push({ role: "user", content: toolResult.text });
+        if (toolResult.products?.length) products.push(...toolResult.products);
+      }
+      continue;
     }
 
-    toolTurns++;
-    if (toolTurns > MAX_TOOL_TURNS) {
-      finalContent =
-        "I've gathered a lot of information — could you confirm the last detail so I can give you a precise answer?";
-      break;
-    }
-
-    const ctx = { tenant, chatbotId, conversationId, db, allowed };
-    for (const call of result.toolCalls) {
-      const toolResult = await executeTool(call.name, call.arguments, ctx);
+    // No tool call. Some models occasionally "answer" by repeating the
+    // assistant tool-call message back (e.g. `tool:search_products:{...}`
+    // plus a trailing `</tool_call>`), and the malformed tool_calls array
+    // gets dropped during parsing — leaving the echo as content. Detect that
+    // and nudge it once to reply in plain text instead of shipping the echo.
+    const text = result.content ?? "";
+    if (looksLikeToolCallEcho(text)) {
+      echoRecoveries++;
+      if (echoRecoveries > 1 || toolTurns >= MAX_TOOL_TURNS) {
+        finalContent = fallbackReply(products, tenant.currency);
+        break;
+      }
       transcript.push({
-        role: "assistant",
-        content: `tool:${call.name}:${JSON.stringify(call.arguments ?? {})}`,
+        role: "user",
+        content:
+          "Please reply directly in plain text now. Do not repeat or write any tool-call markers (no 'tool:', '<tool_call>' or '</tool_call>').",
       });
-      transcript.push({ role: "user", content: toolResult.text });
-      if (toolResult.products?.length) products.push(...toolResult.products);
+      continue;
     }
+
+    finalContent = text || fallbackReply(products, tenant.currency);
+    break;
   }
 
   const reply = finalContent.trim();
@@ -168,7 +198,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // Gate 5 — output gate (response validator): if the model went out of scope
   // (leaked internals, mentioned another tenant, or answered off-topic),
   // discard the reply and send the fixed refusal instead.
-  const output = checkOutputGate(reply, tenant, policy);
+  const output = checkOutputGate(reply, tenant, policy, dedupeProducts(products).map((p) => p.name));
   const finalReply = output.allowed ? reply : refusalReply(policy);
 
   // Persist
@@ -188,7 +218,11 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     createdAt: new Date().toISOString(),
   });
 
-  return { reply: finalReply, products: dedupeProducts(products).slice(0, 6), conversationId };
+  return {
+    reply: finalReply,
+    products: dedupeProducts(products).slice(0, 6),
+    conversationId,
+  };
 }
 
 /**
@@ -227,7 +261,10 @@ function buildSystemPrompt(tenant: Tenant, policy: TenantPolicy): string {
     "- When a customer asks about a specific product's features (waterproof, material, care), call get_product or search_knowledge.",
     "- When a customer wants to track an order, call track_order. Never guess a status.",
     "- When search results contain products, present them with name and price, and mention availability.",
+    "- For delivery times, returns policy, care & cleaning guides, size guide, FAQ or other store information not covered by the knowledge base, call search_website to look it up on the store's own website.",
+    "- NEVER browse, link to, quote from or mention any website other than the store's own website.",
     "- Keep replies concise and in British English. Use £ for prices.",
+    "- Format replies with Markdown where it improves readability: **bold** for key terms, bullet or numbered lists for steps/options/details, ## headings for longer answers, and tables for comparisons. Use plain sentences for short answers — don't over-format.",
     "- If a tool returns nothing, tell the customer honestly and offer alternatives.",
     "",
     "Support tickets (create_ticket):",
@@ -241,19 +278,46 @@ function buildSystemPrompt(tenant: Tenant, policy: TenantPolicy): string {
   ].join("\n");
 }
 
-async function seedKnowledge(db: Db, chatbotId: string, message: string): Promise<string | undefined> {
+async function seedKnowledge(db: Db, tenant: Tenant, chatbotId: string, message: string): Promise<string | undefined> {
+  const parts: string[] = [];
+
+  // 1) Knowledge base (guidance + any store-curated entries).
   try {
     const items = await db.getKnowledge(chatbotId, message);
-    if (!items.length) return undefined;
-    return items.map((k) => `${k.title}\n${k.content}`).join("\n\n");
+    if (items.length) {
+      parts.push(items.map((k) => `${k.title}\n${k.content}`).join("\n\n"));
+    }
   } catch {
-    return undefined;
+    // ignore
   }
+
+  // 2) For store-policy / store-info questions, ALSO fetch the tenant's OWN
+  // website via the search_website engine. This guarantees the model gets
+  // real, current data for EVERY tenant (delivery, returns, care, size guide,
+  // FAQ, contact…) without any per-tenant seeding. Deterministic — it does
+  // not depend on the model deciding to call the tool.
+  if (STORE_INFO_QUERY_RE.test(message)) {
+    try {
+      const res = await searchTenantWebsite(tenant, { query: message }, { limit: 2 });
+      if (res.ok && res.text) {
+        parts.push(`Store website (the store's own site — use this as authoritative):\n${res.text}`);
+      }
+    } catch {
+      // ignore — fall back to knowledge base only
+    }
+  }
+
+  return parts.length ? parts.join("\n\n---\n\n") : undefined;
 }
 
-function fallbackReply(products: Product[]): string {
+function looksLikeToolCallEcho(text: string): boolean {
+  const t = text.trim();
+  return t.startsWith("tool:") || t.includes("<tool_call") || t.includes("</tool_call>");
+}
+
+function fallbackReply(products: Product[], currency = "GBP"): string {
   if (products.length) {
-    return `Here's what I found:\n${summarizeProducts(dedupeProducts(products).slice(0, 6), "GBP")}\n\nWould you like more details on any of these?`;
+    return `Here's what I found:\n${summarizeProducts(dedupeProducts(products).slice(0, 6), currency)}\n\nWould you like more details on any of these?`;
   }
   return "I can help you find products, check an order, or answer questions about our jewellery. What would you like?";
 }
