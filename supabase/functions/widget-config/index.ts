@@ -26,7 +26,6 @@ function publicConfig(
   tenant: {
     name: string;
     welcomeMessage?: string;
-    tone?: string;
     brandColour?: string;
     storeUrl?: string;
   },
@@ -36,8 +35,10 @@ function publicConfig(
     active: true,
     name: bot.name,
     title: tenant.name || bot.name,
-    welcomeMessage: tenant.welcomeMessage ?? null,
-    subtitle: tenant.tone ?? null,
+    // The widget renders `subtitle` as its greeting — that is the welcome
+    // message, NOT the personality/tone (which is agent behaviour and must
+    // never be exposed in the public config).
+    subtitle: tenant.welcomeMessage ?? null,
     brandColour: tenant.brandColour ?? null,
     storeUrl: tenant.storeUrl ?? null,
   };

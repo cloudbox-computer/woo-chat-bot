@@ -54,8 +54,9 @@ async function handle(req: Request): Promise<Response> {
       active: bot.active,
       name: bot.name,
       title: tenant.name || bot.name,
+      // The widget greeting is the welcome message, not the personality/tone.
       welcomeMessage: tenant.welcomeMessage,
-      subtitle: tenant.tone,
+      subtitle: tenant.welcomeMessage,
       brandColour: tenant.brandColour,
       storeUrl: tenant.storeUrl,
     });
