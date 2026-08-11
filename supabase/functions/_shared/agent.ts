@@ -11,7 +11,7 @@ import {
   refusalReply,
 } from "./policy.ts";
 import { executeTool, searchTenantWebsite, summarizeProducts, TOOL_SPECS, TOOL_PERMISSIONS } from "./tools.ts";
-import type { ChatRequest, ChatResponse, Product, Tenant, TenantPolicy, ToolPermission } from "./types.ts";
+import type { ChatRequest, ChatResponse, Conversation, Product, Tenant, TenantPolicy, ToolPermission } from "./types.ts";
 import { DEFAULT_CHATBOT_PERMISSIONS } from "./types.ts";
 
 export const MAX_TOOL_TURNS = 6;
@@ -22,6 +22,27 @@ export const MAX_TOOL_TURNS = 6;
 // model always has real, current data — deterministic and multi-tenant safe.
 const STORE_INFO_QUERY_RE =
   /\b(delivery|shipping|dispatch|postage|tracking|return|refund|exchange|cancel|care|cleaning|clean|tarnish|polish|size guide|sizing|warranty|guarantee|faq|contact|payment|terms|policy|how long|estimated arrival|delivered)\b/i;
+
+// convo5 — GDPR / account-gated flows.
+//
+// Deterministic intent classifiers that run AFTER the topic gate but BEFORE
+// any model spend. They give the assistant GDPR-transparent behaviour without
+// relying on the model to remember the rules:
+//
+//   1. Data-subject requests (access/erasure)  → explain rights + offer ticket.
+//   2. Sensitive order actions (cancel/refund/modify) → hand off to a human.
+//   3. Account-specific lookups (order/ticket) with no verified email → ask
+//      for it, transparently, and record consent.
+const ACCOUNT_INTENT_RE =
+  /\b(track (my |the )?order|where('?s| is) my order|order status|my order|my orders|check (on )?my order|delivery status|ticket status|status of my ticket|my ticket|my tickets|my account|account details|my details|my purchases|my (order|purchase) history|what did i order|find my order)\b/i;
+const SENSITIVE_ACTION_RE =
+  /\b(cancel(ling)? (my |the )?(order|purchase)|cancel (order\s*)?#?\d+|refund (my |the )?(order|purchase|money)|get my money back|modify (my |the )?(order|purchase|(delivery|shipping )?address)|change (my |the )?(order|shipping (address|details)|delivery (address|details))|update (my |the )?(order|(delivery|shipping )?address)|amend (my )?order|return (my )?order)\b|\b(i (want|need|would like|'?d like|like to|want to|need to)|can (i|you|we)|could (you|i|we)|please|i am (requesting|asking)|i'm (requesting|asking))\b[^\n]{0,60}\b(refund|return|cancel(ling)?|money back|modify|amendment)\b/i;
+// Informational refund/returns questions ("what's your refund policy?") are NOT
+// sensitive actions — the guard lets those through to the normal agent flow.
+const SENSITIVE_INFO_QUESTION_RE =
+  /\b(policy|how (do|does|can|to|is)|what('?s| is) (your |the )?(refund|return|cancel)|tell me (about|your))\b/i;
+const GDPR_REQUEST_RE =
+  /\b(delete|erase|remove|forget) (all |any )?(my |the )?(personal )?(data|information|details|records|info|account)\b|\bforget me\b|what data do you (have|hold|store)|gdpr|data protection|privacy policy|right to (access|erasure|be forgotten)|personal data\b/i;
 
 interface TranscriptEntry {
   role: "user" | "assistant";
@@ -97,8 +118,9 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // Conversation (existing or new)
   let conversationId = req.conversationId;
   let fresh = false;
+  let existing: Conversation | null = null;
   if (conversationId) {
-    const existing = await db.getConversation(conversationId);
+    existing = await db.getConversation(conversationId);
     if (existing && existing.chatbotId !== chatbotId) {
       throw new AgentError("Conversation does not belong to this chatbot", 400);
     }
@@ -111,9 +133,56 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
       id: conversationId,
       chatbotId,
       customerEmail: req.customerEmail,
+      emailConsent: req.emailConsent === true ? true : undefined,
+      title: deriveTitle(req.message),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
+  }
+
+  // Persist a customer email when the request provides one or the customer
+  // mentions one in the message (e.g. "my email is x@y.com"). This populates
+  // the "Customer" column in the dashboard overview and gives the assistant a
+  // verified identity for account lookups. Never fatal.
+  const emailFromMessage = extractEmail(req.message);
+  const emailToPersist = (req.customerEmail ?? "").trim() || emailFromMessage;
+  if (emailToPersist) {
+    try {
+      // GDPR: record whether the customer EXPLICITLY consented (widget consent
+      // box). If they simply volunteered the email in chat, consent stays
+      // false — the email is stored on the lawful basis of providing the
+      // support/order service they asked for.
+      await db.setConversationEmail(conversationId, emailToPersist, req.emailConsent === true);
+    } catch {
+      // ignore — email capture must never break the chat
+    }
+  }
+
+  // Known identity for this request: explicit body field > stored email >
+  // email mentioned in the current message.
+  const knownEmail =
+    (req.customerEmail ?? "").trim() ||
+    (existing?.customerEmail ?? "").trim() ||
+    emailFromMessage ||
+    "";
+
+  // convo5 — GDPR + account-gated flows (deterministic, no model spend).
+  // 1) Data-subject requests (access/erasure): explain rights + offer a
+  //    support ticket (erasure is human-processed, never automated).
+  if (GDPR_REQUEST_RE.test(req.message)) {
+    return { reply: gdprReply(tenant), products: [], conversationId };
+  }
+  // 2) Sensitive order mutations (cancel/refund/modify): handled by a human.
+  //    The sensitive tools are permission-gated off for customers anyway; this
+  //    guarantees the assistant never attempts or promises them. Policy/how
+  //    questions about refunds are informational and stay with the agent.
+  if (SENSITIVE_ACTION_RE.test(req.message) && !SENSITIVE_INFO_QUESTION_RE.test(req.message)) {
+    return { reply: sensitiveHandoffReply(), products: [], conversationId };
+  }
+  // 3) Account-specific lookups (order/ticket) need an email to verify
+  //    ownership. If we don't have one yet, ask — GDPR-transparently.
+  if (ACCOUNT_INTENT_RE.test(req.message) && !knownEmail) {
+    return { reply: emailRequestReply(tenant), products: [], conversationId };
   }
 
   const cfg = aiConfig();
@@ -135,6 +204,8 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   let products: Product[] = [];
   let toolTurns = 0;
   let echoRecoveries = 0;
+  // Deterministic cart-op routing: at most one forced tool call per request.
+  let deterministicRouted = false;
 
   for (;;) {
     const last = transcript[transcript.length - 1];
@@ -187,6 +258,28 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
           "Please reply directly in plain text now. Do not repeat or write any tool-call markers (no 'tool:', '<tool_call>' or '</tool_call>').",
       });
       continue;
+    }
+
+    // No tool call and the model hasn't already run a tool this request.
+    // Small models sometimes answer cart questions from memory instead of
+    // calling the tool. For a few unambiguous cart operations, fall back to a
+    // deterministic tool call so the reply always reflects the persisted
+    // cart. Guarded to run at most once so it can never loop.
+    if (!deterministicRouted && toolTurns === 0) {
+      const forced = detectDeterministicTool(req.message, allowed);
+      if (forced) {
+        deterministicRouted = true;
+        toolTurns++;
+        const ctx = { tenant, chatbotId, conversationId, db, allowed };
+        const toolResult = await executeTool(forced.name, forced.arguments, ctx);
+        transcript.push({
+          role: "assistant",
+          content: `tool:${forced.name}:${JSON.stringify(forced.arguments ?? {})}`,
+        });
+        transcript.push({ role: "user", content: toolResult.text });
+        if (toolResult.products?.length) products.push(...toolResult.products);
+        continue;
+      }
     }
 
     finalContent = text || fallbackReply(products, tenant.currency);
@@ -266,6 +359,7 @@ function buildSystemPrompt(tenant: Tenant, policy: TenantPolicy): string {
     "- Keep replies concise and in British English. Use £ for prices.",
     "- Format replies with Markdown where it improves readability: **bold** for key terms, bullet or numbered lists for steps/options/details, ## headings for longer answers, and tables for comparisons. Use plain sentences for short answers — don't over-format.",
     "- If a tool returns nothing, tell the customer honestly and offer alternatives.",
+    "- Order cancellations, refunds and modifications are handled by the human support team — NEVER perform, promise or attempt them. Offer to raise a support ticket instead.",
     "",
     "Support tickets (create_ticket):",
     "- Raise a ticket ONLY for real problems that need human help: damaged item, missing order, wrong product, product defect, delivery/refund/payment/order problem, complaint, or an explicit request to speak to support.",
@@ -275,6 +369,12 @@ function buildSystemPrompt(tenant: Tenant, policy: TenantPolicy): string {
     "- NEVER invent or pass a tenant ID, a recipient email address or a ticket reference — the system generates those automatically.",
     "- After the tool runs, repeat the reference number the tool returns so the customer can note it down.",
     "- If the customer later asks about a ticket they were given, call check_ticket_status with the reference (and email if you have it).",
+    "",
+    "Privacy & data (GDPR):",
+    "- When you need a customer's email to verify an order or ticket, tell them why you need it and that it is only used to help with their enquiry.",
+    "- Never ask for or store more personal data than the enquiry needs.",
+    "- If a customer asks to see, correct or delete their personal data, explain their rights and offer to raise a ticket for the support team to process it — never refuse, and never delete data yourself.",
+    "- Never use a customer's personal data for anything other than helping them.",
   ].join("\n");
 }
 
@@ -310,6 +410,29 @@ async function seedKnowledge(db: Db, tenant: Tenant, chatbotId: string, message:
   return parts.length ? parts.join("\n\n---\n\n") : undefined;
 }
 
+/**
+ * Deterministic fallback for a couple of unambiguous, no-arg cart operations.
+ * Runs ONLY when the model returned no tool call on the first turn, so it
+ * never overrides a model decision and never weakens the topic gates (which
+ * run before the loop). Returns a single forced tool call or null.
+ */
+function detectDeterministicTool(message: string, toolNames: Set<string>) {
+  const m = message.trim().toLowerCase();
+  if (
+    /(what('?s| is| are)? in my (cart|basket)|show (me )?(my )?(cart|basket)|view (my )?(cart|basket)|cart contents|basket contents)/.test(m) &&
+    toolNames.has("view_cart")
+  ) {
+    return { name: "view_cart" as const, arguments: {} as Record<string, unknown> };
+  }
+  if (
+    /(checkout|pay (now|for)|place (my |the )?order|buy (it|now|these)|go to basket)/.test(m) &&
+    toolNames.has("create_checkout")
+  ) {
+    return { name: "create_checkout" as const, arguments: {} as Record<string, unknown> };
+  }
+  return null;
+}
+
 function looksLikeToolCallEcho(text: string): boolean {
   const t = text.trim();
   return t.startsWith("tool:") || t.includes("<tool_call") || t.includes("</tool_call>");
@@ -332,6 +455,59 @@ function dedupeProducts(products: Product[]): Product[] {
     out.push(p);
   }
   return out;
+}
+
+/** Short title for the dashboard, derived from the first user message. */
+function deriveTitle(message: string): string {
+  const t = message.replace(/\s+/g, " ").trim();
+  return t.length > 60 ? `${t.slice(0, 57)}…` : t;
+}
+
+const EMAIL_IN_MESSAGE_RE = /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i;
+
+/** First email address mentioned in a message, if any. */
+function extractEmail(text: string): string | null {
+  const m = EMAIL_IN_MESSAGE_RE.exec(text);
+  return m ? m[0].toLowerCase() : null;
+}
+
+/** GDPR-transparent request for the customer's email to verify an order/ticket. */
+function emailRequestReply(tenant: Tenant): string {
+  const lines = [
+    "To look that up for you, I'll need the email address you used — it's how we verify the order or ticket belongs to you, and it lets me pull up your specific details securely.",
+    "",
+    "Just so you know how your data is handled:",
+    `- I only use your email to find your order or ticket and help with your enquiry.`,
+    `- It's stored with this conversation so we can help you again, and it's never shared outside ${tenant.name}.`,
+    `- You can ask to see or delete your data at any time.`,
+  ];
+  if (tenant.privacyPolicyUrl) {
+    lines.push(`- Read our privacy policy here: ${tenant.privacyPolicyUrl}`);
+  }
+  lines.push("", "Please reply with the email you used.");
+  return lines.join("\n");
+}
+
+/** Sensitive order actions are handled by a human, never the assistant. */
+function sensitiveHandoffReply(): string {
+  return [
+    "For your security, order cancellations, refunds and modifications are handled by our human support team — the automated assistant can't change or cancel an order directly.",
+    "",
+    "If you'd like, I can raise a support ticket so a member of the team can help you with this. Just reply \"yes, please raise a ticket\" and I'll set it up for you.",
+  ].join("\n");
+}
+
+/** Data-subject rights (GDPR): explain + offer a human-processed request. */
+function gdprReply(tenant: Tenant): string {
+  const lines = [
+    "Of course — you have the right to access the personal data we hold about you, and to ask us to correct or delete it.",
+    "",
+    "The assistant can't delete data automatically, but our support team can process your request securely. Would you like me to raise a ticket for that? Just reply \"yes, please raise a ticket\" and I'll set it up.",
+  ];
+  if (tenant.privacyPolicyUrl) {
+    lines.push("", `You can also read our privacy policy here: ${tenant.privacyPolicyUrl}`);
+  }
+  return lines.join("\n");
 }
 
 export class AgentError extends Error {

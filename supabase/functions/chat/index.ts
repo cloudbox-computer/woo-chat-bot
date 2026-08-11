@@ -13,12 +13,18 @@ Deno.serve(async (req: Request) => {
     const message = typeof body.message === "string" ? body.message : "";
     if (!chatbotId) return json({ error: "chatbotId is required" }, 400);
     if (!message.trim()) return json({ error: "message is required" }, 400);
+    // Production hardening: reject oversized messages cleanly (avoids AI token
+    // exhaustion / runaway cost) instead of letting the provider 500.
+    if (message.trim().length > 4000) {
+      return json({ error: "message is too long (max 4000 chars)" }, 400);
+    }
 
     const result = await runAgent({
       chatbotId,
       message: message.trim(),
       conversationId: typeof body.conversationId === "string" ? body.conversationId : undefined,
       customerEmail: typeof body.customerEmail === "string" ? body.customerEmail : undefined,
+      emailConsent: body.emailConsent === true ? true : undefined,
     });
     return json(result);
   } catch (err) {

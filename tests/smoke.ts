@@ -50,6 +50,16 @@ async function chat(message: string, conversationId?: string) {
   return r;
 }
 
+/** No known email — for testing the email-request / GDPR gates. */
+async function chatNoEmail(message: string, conversationId?: string) {
+  const r = await runAgent({
+    chatbotId: CHATBOT_ID,
+    message,
+    ...(conversationId ? { conversationId } : {}),
+  });
+  return r;
+}
+
 // 1. Greeting
 {
   const r = await chat("Hi!");
@@ -267,6 +277,43 @@ const ivyRefusal = refusalReply(ivyPolicy);
     console.log(`  status=${status.text}`);
     console.log(`  wrongEmail=${wrongEmail.text}`);
     console.log(`  notFound=${notFound.text}`);
+  }
+  console.log("---");
+}
+
+// 12. convo5 — GDPR + sensitive-handoff + email-request gates (deterministic).
+{
+  // Data-subject request → explain rights + offer ticket, never automated deletion.
+  const gdpr = await chatNoEmail("I'd like you to delete all my data please");
+  check("gdpr erasure request", gdpr.reply, gdpr.products, ["ticket", "delete"]);
+
+  const gdprAccess = await chatNoEmail("what data do you have on me?");
+  check("gdpr access request", gdprAccess.reply, gdprAccess.products, ["right", "ticket"]);
+
+  // Sensitive order mutation → human handoff, never attempted by the assistant.
+  const cancel = await chatNoEmail("Can you cancel my order please?");
+  check("sensitive: cancel order", cancel.reply, cancel.products, ["human support team", "ticket"]);
+
+  const refund = await chatNoEmail("I want a refund for my bracelet");
+  check("sensitive: refund", refund.reply, refund.products, ["human support team"]);
+
+  const modify = await chatNoEmail("Can you change my delivery address?");
+  check("sensitive: modify order", modify.reply, modify.products, ["human support team"]);
+
+  // Account lookup with NO known email → GDPR-transparent email request.
+  const ask = await chatNoEmail("Where is my order?");
+  check("account lookup asks for email", ask.reply, ask.products, ["email address", "privacy"]);
+
+  // Account lookup WITH known email → not gated (goes to the agent, has email).
+  const known = await chat("Where is my order?");
+  check("account lookup with known email not gated", known.reply, known.products, [""]);
+  const notGated = !known.reply.toLowerCase().includes("reply with the email you used");
+  if (notGated) {
+    passed++;
+    console.log("PASS [account lookup with known email passes through]");
+  } else {
+    failed++;
+    console.log(`FAIL [account lookup with known email passes through] reply=${known.reply}`);
   }
   console.log("---");
 }

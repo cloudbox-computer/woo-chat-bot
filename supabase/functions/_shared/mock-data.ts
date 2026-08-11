@@ -18,6 +18,7 @@ export const IVY_PEARLS_TENANT: Tenant = {
   brandColour: "#9c7b4f",
   supportEmail: "support@ivyandpearls.co.uk",
   ticketPrefix: "IP",
+  privacyPolicyUrl: "https://ivyandpearls.co.uk/privacy-policy/",
   businessContext:
     "Ivy & Pearls is a UK jewellery brand selling necklaces, earrings, bracelets, rings and gift sets in gold, silver and rose gold. " +
     "Shipping is free over £50 in the UK; standard delivery 2-4 working days. Prices are in GBP (£).",

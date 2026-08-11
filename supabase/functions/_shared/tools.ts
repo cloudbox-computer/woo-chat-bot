@@ -1,4 +1,4 @@
-import type { Order, Product, Tenant, Ticket, TicketCategory, ToolPermission } from "./types.ts";
+import type { CartItem, Order, Product, Tenant, Ticket, TicketCategory, ToolPermission } from "./types.ts";
 import { TICKET_CATEGORIES } from "./types.ts";
 import type { ToolSpec } from "./ai.ts";
 import { MockWooClient, WooCommerceClient, type WooClient } from "./woo.ts";
@@ -167,7 +167,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     function: {
       name: "create_ticket",
       description:
-        "CONTROLLED TOOL — create a support ticket when the customer has a problem that needs human help (damaged item, missing order, wrong product, defect, delivery/refund/payment problem, complaint, or an explicit request to speak to support). ALWAYS confirm with the customer first ('Would you like me to raise this with our support team?') unless they have already explicitly asked to create a ticket. The tenant_id, recipient email and reference are generated server-side — never pass them. This tool emails the support team automatically.",
+        "CONTROLLED TOOL — create a support ticket when the customer has a problem that needs human help (damaged item, missing order, wrong product, defect, delivery/refund/payment problem, complaint, or an explicit request to speak to support). ALWAYS confirm with the customer first ('Would you like me to raise this with our support team?') unless they have already explicitly asked to create a ticket. The tenant_id, recipient email and reference are generated server-side — never pass them. This tool emails the support team automatically. The customer's email is used ONLY to verify ownership of the ticket and to contact them about it — never for anything else (GDPR).",
       parameters: {
         type: "object",
         properties: {
@@ -433,18 +433,21 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         });
       }
       await ctx.db.setCart(ctx.conversationId, cart);
-      return { ok: true, text: `Added to cart: ${qty}× ${p.name}${variantName ? ` (${variantName})` : ""}.\n${summarizeCart(cart, ctx.tenant.currency)}` };
+      return { ok: true, text: `Added to cart: ${qty}× ${p.name}${variantName ? ` (${variantName})` : ""}.\n${summarizeCart(cart, ctx.tenant.currency)}`, products: cartToProducts(cart) };
     }
     case "view_cart": {
       const cart = await ctx.db.getCart(ctx.conversationId);
       if (!cart.length) return { ok: true, text: "Your cart is empty. Would you like me to find something for you?" };
-      return { ok: true, text: summarizeCart(cart, ctx.tenant.currency) };
+      // Expose cart items as products so the output gate can recognise the
+      // product names the model will quote (avoids false off-topic refusals
+      // when a name contains a keyword like "tennis").
+      return { ok: true, text: summarizeCart(cart, ctx.tenant.currency), products: cartToProducts(cart) };
     }
     case "create_checkout": {
       const cart = await ctx.db.getCart(ctx.conversationId);
       if (!cart.length) return { ok: false, text: "Your cart is empty — nothing to check out yet." };
       const url = woo.buildCheckoutUrl(cart);
-      return { ok: true, text: `You have ${cart.length} item${cart.length === 1 ? "" : "s"} ready to check out. Complete your order here: ${url}` };
+      return { ok: true, text: `You have ${cart.length} item${cart.length === 1 ? "" : "s"} ready to check out. Complete your order here: ${url}`, products: cartToProducts(cart) };
     }
     case "cancel_order": {
       const order = await woo.cancelOrder({ orderId: asStr(args.orderId) ?? "", email: asStr(args.email) });
@@ -871,4 +874,23 @@ export function summarizeCart(cart: Array<{ productName: string; variantName?: s
   const total = cart.reduce((s, i) => s + i.price * i.quantity, 0);
   const lines = cart.map((i) => `- ${i.productName}${i.variantName ? ` (${i.variantName})` : ""} × ${i.quantity} — ${sym}${(i.price * i.quantity).toFixed(2)}`);
   return `Your cart:\n${lines.join("\n")}\nTotal: ${sym}${total.toFixed(2)}`;
+}
+
+/**
+ * Maps persisted cart items to Product objects so the output gate can
+ * recognise the product names the model quotes in cart replies. Without this,
+ * a legitimate product name containing an off-topic keyword (e.g. "Diamond
+ * Tennis Bracelet" → "tennis" in the sports list) would trip Gate 5's fuzzy
+ * off-topic check and cause a false refusal.
+ */
+export function cartToProducts(cart: CartItem[]): Product[] {
+  return cart.map((i) => ({
+    id: i.productId,
+    name: i.productName,
+    price: i.price,
+    currency: i.currency,
+    url: i.url,
+    imageUrl: i.imageUrl,
+    inStock: i.inStock,
+  }));
 }

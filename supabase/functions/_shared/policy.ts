@@ -39,7 +39,7 @@ export const TOPIC_LEXICON: Record<string, string[]> = {
     "bracelet", "bracelets", "bangle", "bangles",
     "ring", "rings", "signet", "gemstone", "gemstones",
     "jewellery", "jewelry", "jewel", "piece", "pieces",
-    "product", "products", "catalogue", "collection",
+    "product", "products", "item", "items", "catalogue", "collection",
     "in stock", "out of stock", "stock", "price", "prices",
   ],
   jewellery: [
@@ -254,10 +254,34 @@ const TICKET_SIGNALS: RegExp[] = [
   /\b(complaint|complain|complained)\b/i,
   /\b(speak to|talk to|contact|see|reach) (a |the )?(human|support|someone|person|agent|team)\b/i,
   /\b(refund (problem|issue)|refund not (received|arrived)|no refund)\b/i,
+  // Bare "ticket"/"tickets" — asking about a support ticket is inherently
+  // in-scope (convo5). Without this, "what's the status of my ticket?" fails
+  // closed on the allowlist. Ownership is still verified by reference + email
+  // inside check_ticket_status, so this only widens reach, not data access.
+  /\b(ticket|tickets)\b/i,
 ];
 
 function hasTicketSignal(m: string): boolean {
   return TICKET_SIGNALS.some((p) => p.test(m));
+}
+
+// ---------------------------------------------------------------------------
+// GDPR / data-subject request signals (convo5 — Gate 3).
+//
+// A customer asking to see, correct or delete their personal data, or asking
+// about privacy/GDPR, is a legitimate support topic. These messages must pass
+// the topic gate so the assistant can explain their rights and offer a support
+// ticket (erasure is human-processed, never automated).
+// ---------------------------------------------------------------------------
+
+const GDPR_SIGNALS: RegExp[] = [
+  /\b(delete|erase|remove|forget) (all |any )?(my |the )?(personal )?(data|information|details|records|info|account)\b|\bforget me\b/i,
+  /\b(what data do you (have|hold|store) (on|about) me|access to my data|see my data)\b/i,
+  /\b(gdpr|data protection|privacy policy|right to (access|erasure|be forgotten|rectification)|personal data)\b/i,
+];
+
+function hasGdprSignal(m: string): boolean {
+  return GDPR_SIGNALS.some((p) => p.test(m));
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +329,10 @@ export async function checkTopicGate(
   // Support-ticket signals ("my necklace arrived damaged", "I need to speak
   // to support") — in-scope; the AI may offer create_ticket for these.
   if (hasTicketSignal(m)) return { allowed: true, reason: "ok" };
+
+  // GDPR / data-subject requests ("delete my data", "what is your privacy
+  // policy?") — in-scope; the assistant explains rights and offers a ticket.
+  if (hasGdprSignal(m)) return { allowed: true, reason: "ok" };
 
   // Ambiguous. Fail closed unless a cheap classifier approves it.
   if (policy.securityLevel !== "standard") {

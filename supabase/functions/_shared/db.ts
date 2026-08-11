@@ -18,6 +18,7 @@ export interface Db {
   getKnowledge(chatbotId: string, query?: string): Promise<KnowledgeItem[]>;
   createConversation(c: Conversation): Promise<void>;
   getConversation(id: string): Promise<Conversation | null>;
+  setConversationEmail(conversationId: string, email: string, consent?: boolean): Promise<void>;
   getMessages(conversationId: string): Promise<Message[]>;
   appendMessage(m: Message): Promise<void>;
   logFeedback(f: Feedback): Promise<void>;
@@ -77,6 +78,13 @@ export class MemoryDb implements Db {
   }
   async createConversation(c: Conversation): Promise<void> {
     this.conversations.push(c);
+  }
+  async setConversationEmail(conversationId: string, email: string, consent?: boolean): Promise<void> {
+    const c = this.conversations.find((x) => x.id === conversationId);
+    if (c) {
+      c.customerEmail = email;
+      if (consent !== undefined) c.emailConsent = consent;
+    }
   }
   async getConversation(id: string): Promise<Conversation | null> {
     return this.conversations.find((c) => c.id === id) ?? null;
@@ -183,6 +191,7 @@ export class SupabaseDb implements Db {
           : undefined,
       supportEmail: row.support_email ? String(row.support_email) : undefined,
       ticketPrefix: row.ticket_prefix ? String(row.ticket_prefix) : undefined,
+      privacyPolicyUrl: row.privacy_policy_url ? String(row.privacy_policy_url) : undefined,
     };
   }
 
@@ -190,7 +199,7 @@ export class SupabaseDb implements Db {
     const bot = await this.getChatbot(chatbotId);
     if (!bot) return null;
     const rows = await this.get<Record<string, unknown>>("tenants", {
-      select: "id,slug,name,currency,store_url,welcome_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,integrations(credentials)",
+      select: "id,slug,name,currency,store_url,welcome_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(credentials)",
       id: `eq.${bot.tenantId}`,
       limit: "1",
     });
@@ -265,14 +274,27 @@ export class SupabaseDb implements Db {
       id: c.id,
       chatbot_id: c.chatbotId,
       customer_email: c.customerEmail ?? null,
+      email_consent: c.emailConsent ?? null,
+      title: c.title ?? null,
       created_at: c.createdAt,
       updated_at: c.updatedAt,
     });
   }
 
+  async setConversationEmail(conversationId: string, email: string, consent?: boolean): Promise<void> {
+    const patch: Record<string, unknown> = { customer_email: email };
+    if (consent !== undefined) patch.email_consent = consent;
+    const res = await fetch(`${this.base}/conversations?id=eq.${conversationId}`, {
+      method: "PATCH",
+      headers: { ...this.headers, Prefer: "return=minimal" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error(`DB update conversations: ${res.status} ${await res.text()}`);
+  }
+
   async getConversation(id: string): Promise<Conversation | null> {
     const rows = await this.get<Record<string, unknown>>("conversations", {
-      select: "id,chatbot_id,customer_email,created_at,updated_at",
+      select: "id,chatbot_id,customer_email,email_consent,title,created_at,updated_at",
       id: `eq.${id}`,
       limit: "1",
     });
@@ -282,6 +304,8 @@ export class SupabaseDb implements Db {
       id: String(r.id),
       chatbotId: String(r.chatbot_id),
       customerEmail: r.customer_email ? String(r.customer_email) : undefined,
+      emailConsent: r.email_consent === true ? true : undefined,
+      title: r.title ? String(r.title) : undefined,
       createdAt: String(r.created_at),
       updatedAt: String(r.updated_at),
     };
@@ -293,14 +317,26 @@ export class SupabaseDb implements Db {
       conversation_id: `eq.${conversationId}`,
       order: "created_at.asc",
     });
-    return rows.map((r) => ({
-      id: String(r.id),
-      conversationId: String(r.conversation_id),
-      role: r.role as "user" | "assistant",
-      content: String(r.content),
-      products: r.products ? (r.products as Message["products"]) : undefined,
-      createdAt: String(r.created_at),
-    }));
+    return rows.map((r) => {
+      let products = r.products;
+      // Legacy rows may hold a jsonb *string* containing the JSON array.
+      if (typeof products === "string") {
+        try {
+          const parsed = JSON.parse(products);
+          products = Array.isArray(parsed) ? parsed : undefined;
+        } catch {
+          products = undefined;
+        }
+      }
+      return {
+        id: String(r.id),
+        conversationId: String(r.conversation_id),
+        role: r.role as "user" | "assistant",
+        content: String(r.content),
+        products: products ? (products as Message["products"]) : undefined,
+        createdAt: String(r.created_at),
+      };
+    });
   }
 
   async appendMessage(m: Message): Promise<void> {
@@ -309,7 +345,8 @@ export class SupabaseDb implements Db {
       conversation_id: m.conversationId,
       role: m.role,
       content: m.content,
-      products: m.products ? JSON.stringify(m.products) : null,
+      // Raw array -> jsonb array (avoids double-encoding as a jsonb string).
+      products: m.products ?? null,
       created_at: m.createdAt,
     });
   }
@@ -330,6 +367,16 @@ export class SupabaseDb implements Db {
       limit: "1",
     });
     const items = rows[0]?.items;
+    // Legacy rows may hold a jsonb *string* containing the JSON array (old
+    // setCart double-encoded with JSON.stringify). Parse those defensively.
+    if (typeof items === "string") {
+      try {
+        const parsed = JSON.parse(items);
+        return Array.isArray(parsed) ? (parsed as CartItem[]) : [];
+      } catch {
+        return [];
+      }
+    }
     if (!Array.isArray(items)) return [];
     return items as CartItem[];
   }
@@ -344,13 +391,15 @@ export class SupabaseDb implements Db {
       const res = await fetch(`${this.base}/carts?conversation_id=eq.${conversationId}`, {
         method: "PATCH",
         headers: { ...this.headers, Prefer: "return=minimal" },
-        body: JSON.stringify({ items: JSON.stringify(items), updated_at: new Date().toISOString() }),
+        // Send the array directly so PostgREST stores it as a jsonb array
+        // (not a double-encoded jsonb string).
+        body: JSON.stringify({ items, updated_at: new Date().toISOString() }),
       });
       if (!res.ok) throw new Error(`DB cart update: ${res.status} ${await res.text()}`);
     } else {
       await this.insert("carts", {
         conversation_id: conversationId,
-        items: JSON.stringify(items),
+        items, // raw array -> jsonb array
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });

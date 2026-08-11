@@ -85,6 +85,7 @@ export interface OverviewData {
     id: string;
     title: string;
     customerEmail: string | null;
+    emailConsent: boolean;
     createdAt: string | null;
   }>;
 }

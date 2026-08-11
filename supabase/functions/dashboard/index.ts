@@ -111,7 +111,7 @@ async function actionOverview(ctx: Awaited<ReturnType<typeof resolveDashboardCon
     }),
     getRows(c, "usage_logs", { select: "count", chatbot_id: botFilter }),
     getRows(c, "conversations", {
-      select: "id,title,customer_email,created_at",
+      select: "id,title,customer_email,email_consent,created_at",
       chatbot_id: botFilter,
       order: "created_at.desc",
       limit: "10",
@@ -128,6 +128,7 @@ async function actionOverview(ctx: Awaited<ReturnType<typeof resolveDashboardCon
       id: r.id,
       title: r.title ?? "(no title)",
       customerEmail: r.customer_email ?? null,
+      emailConsent: r.email_consent === true ? true : false,
       createdAt: r.created_at ?? null,
     })),
   });

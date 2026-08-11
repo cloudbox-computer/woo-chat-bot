@@ -10,6 +10,8 @@ export interface WidgetConfig {
   subtitle?: string;
   quickActions?: string[];
   customerEmail?: string;
+  /** GDPR: privacy-policy URL shown in the widget footer + consent line. */
+  privacyUrl?: string;
 }
 
 interface ChatApiRequest {
@@ -17,6 +19,7 @@ interface ChatApiRequest {
   message: string;
   conversationId?: string;
   customerEmail?: string;
+  emailConsent?: boolean;
 }
 
 interface ChatApiResponse {
@@ -55,6 +58,9 @@ const COLORS = {
   danger: "#c0392b",
 };
 
+// GDPR: used to surface the email-consent box when a customer shares an email.
+const EMAIL_RE = /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i;
+
 function sym(currency?: string): string {
   if (currency === "GBP") return "£";
   if (currency === "USD") return "$";
@@ -89,6 +95,10 @@ export function Widget({ config }: { config: WidgetConfig }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [sentFeedback, setSentFeedback] = useState<Set<string>>(new Set());
+  // GDPR: consent box appears once the customer shares an email; when checked,
+  // their explicit consent is sent to /chat and stored on the conversation.
+  const [emailConsent, setEmailConsent] = useState(false);
+  const [askConsent, setAskConsent] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const brand = config.brandColour ?? COLORS.primary;
@@ -104,6 +114,8 @@ export function Widget({ config }: { config: WidgetConfig }) {
   async function send(text: string) {
     const trimmed = text.trim();
     if (!trimmed || loading) return;
+    // GDPR: if the customer is sharing an email, surface the consent box once.
+    if (EMAIL_RE.test(trimmed) && !askConsent) setAskConsent(true);
     setInput("");
     setMessages((m) => [...m, { role: "user", content: trimmed }]);
     setLoading(true);
@@ -116,6 +128,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
           message: trimmed,
           conversationId,
           customerEmail: config.customerEmail,
+          emailConsent: emailConsent || undefined,
         } satisfies ChatApiRequest),
       });
       if (!res.ok) throw new Error(`chat failed: ${res.status}`);
@@ -324,6 +337,45 @@ export function Widget({ config }: { config: WidgetConfig }) {
               ))}
             </div>
           )}
+          {askConsent && (
+            <label
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "flex-start",
+                padding: "8px 12px",
+                borderTop: `1px solid ${COLORS.border}`,
+                background: "#fff",
+                fontSize: 11,
+                color: COLORS.muted,
+                lineHeight: 1.45,
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={emailConsent}
+                onChange={(e) => setEmailConsent(e.target.checked)}
+                style={{ marginTop: 1 }}
+              />
+              <span>
+                I agree to {title} storing my email to help with this enquiry.
+                {config.privacyUrl ? (
+                  <>
+                    {" "}
+                    <a
+                      href={config.privacyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: brand, textDecoration: "underline" }}
+                    >
+                      Privacy policy
+                    </a>
+                  </>
+                ) : null}
+              </span>
+            </label>
+          )}
           <div style={s.inputRow}>
             <input
               style={s.input}
@@ -334,6 +386,28 @@ export function Widget({ config }: { config: WidgetConfig }) {
             />
             <button style={s.send} onClick={() => send(input)} disabled={loading || !input.trim()}>Send</button>
           </div>
+          {config.privacyUrl && (
+            <div
+              style={{
+                padding: "6px 12px",
+                borderTop: `1px solid ${COLORS.border}`,
+                background: "#fff",
+                fontSize: 10,
+                color: COLORS.muted,
+                lineHeight: 1.5,
+              }}
+            >
+              🔒 We only use your email to help with your enquiry and never share it.{" "}
+              <a
+                href={config.privacyUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: brand, textDecoration: "underline" }}
+              >
+                Privacy policy
+              </a>
+            </div>
+          )}
         </div>
       )}
       <button style={s.launcher} onClick={() => setOpen((o) => !o)} aria-label="Open chat">

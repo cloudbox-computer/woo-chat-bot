@@ -65,7 +65,18 @@ export default function Overview({ config }: { config: ConfigData | null }) {
               {data.recentConversations.map((c) => (
                 <tr key={c.id}>
                   <td>{c.title}</td>
-                  <td>{c.customerEmail ?? <span className="muted">—</span>}</td>
+                  <td>
+                    {c.customerEmail ?? <span className="muted">—</span>}
+                    {c.emailConsent ? (
+                      <span
+                        className="muted"
+                        style={{ display: "block", fontSize: 11 }}
+                        title="Customer consented to store their email (GDPR)"
+                      >
+                        consent ✓
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="muted">{c.createdAt ? new Date(c.createdAt).toLocaleString() : "—"}</td>
                 </tr>
               ))}

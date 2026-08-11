@@ -47,6 +47,9 @@ export interface Tenant {
   supportEmail?: string;
   /** Prefix used in ticket references, e.g. "IP" → IP-2026-000042. */
   ticketPrefix?: string;
+  /** Public privacy-policy URL (convo5/GDPR). Shown in the widget and linked
+   *  by the assistant whenever it asks for personal data. */
+  privacyPolicyUrl?: string;
 }
 
 export interface Chatbot {
@@ -73,6 +76,12 @@ export interface Conversation {
   id: string;
   chatbotId: string;
   customerEmail?: string;
+  /** GDPR: true when the customer explicitly consented to their email being
+   *  stored for support (e.g. ticked the widget consent box). False/undefined
+   *  means they merely volunteered it in chat. */
+  emailConsent?: boolean;
+  /** Short summary derived from the first user message (shown in the dashboard). */
+  title?: string;
   createdAt: string; // ISO
   updatedAt: string;
 }
@@ -270,6 +279,8 @@ export interface ChatRequest {
   conversationId?: string;
   message: string;
   customerEmail?: string;
+  /** GDPR consent for storing the customer email for support (widget consent box). */
+  emailConsent?: boolean;
 }
 
 export interface ChatResponse {

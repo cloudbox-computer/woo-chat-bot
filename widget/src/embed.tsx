@@ -10,6 +10,7 @@ interface PublicWidgetConfig {
   subtitle?: string | null;
   brandColour?: string | null;
   storeUrl?: string | null;
+  privacyPolicyUrl?: string | null;
 }
 
 function scriptElement(): HTMLScriptElement | null {
@@ -72,6 +73,12 @@ function init(script: HTMLScriptElement | null) {
         subtitle: data.subtitle ?? remote.subtitle ?? remote.welcomeMessage ?? undefined,
         quickActions: data.quickActions?.split("|").map((x) => x.trim()),
         customerEmail: data.customerEmail,
+        // GDPR: explicit data-privacy-url wins; else the tenant privacy policy
+        // from widget-config; else a sensible default on the store site.
+        privacyUrl:
+          data.privacyUrl ??
+          remote.privacyPolicyUrl ??
+          (remote.storeUrl ? `${remote.storeUrl.replace(/\/+$/, "")}/privacy-policy/` : undefined),
       };
       createRoot(mount).render(<Widget config={config} />);
     })

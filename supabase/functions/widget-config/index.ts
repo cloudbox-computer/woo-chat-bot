@@ -28,6 +28,7 @@ function publicConfig(
     welcomeMessage?: string;
     brandColour?: string;
     storeUrl?: string;
+    privacyPolicyUrl?: string;
   },
 ) {
   return {
@@ -41,6 +42,8 @@ function publicConfig(
     subtitle: tenant.welcomeMessage ?? null,
     brandColour: tenant.brandColour ?? null,
     storeUrl: tenant.storeUrl ?? null,
+    // GDPR: public privacy-policy URL so the widget can link to it.
+    privacyPolicyUrl: tenant.privacyPolicyUrl ?? null,
   };
 }
 

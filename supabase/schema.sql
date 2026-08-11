@@ -47,11 +47,17 @@ create table if not exists conversations (
   id            uuid primary key default gen_random_uuid(),
   chatbot_id    text not null references chatbots(id) on delete cascade,
   customer_email text,
+  email_consent boolean,                        -- convo5/GDPR: customer explicitly agreed to store email for support
   title         text,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
 create index if not exists conversations_chatbot_idx on conversations(chatbot_id, updated_at desc);
+
+-- convo5 (GDPR): tenant privacy-policy URL (widget + assistant link to it),
+-- and explicit email-consent flag on existing conversations.
+alter table tenants add column if not exists privacy_policy_url text;
+alter table conversations add column if not exists email_consent boolean;
 
 -- Individual messages. assistant messages may carry product payloads as jsonb.
 create table if not exists messages (
@@ -114,6 +120,7 @@ create table if not exists feedback (
 create table if not exists carts (
   conversation_id uuid primary key references conversations(id) on delete cascade,
   items           jsonb not null default '[]'::jsonb,  -- CartItem[]
+  created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
 
