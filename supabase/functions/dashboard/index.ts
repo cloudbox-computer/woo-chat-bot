@@ -163,6 +163,7 @@ async function actionGetConfig(ctx: Awaited<ReturnType<typeof resolveDashboardCo
       ticketPrefix: tenant.ticket_prefix ?? null,
       brandColour: tenant.brand_colour ?? null,
       welcomeMessage: tenant.welcome_message ?? null,
+      assistantHeaderMessage: tenant.assistant_header_message ?? null,
       tone: tenant.tone ?? null,
       businessContext: tenant.business_context ?? null,
       defaultTicketPriority: tenant.default_ticket_priority ?? "normal",
@@ -199,6 +200,7 @@ async function actionUpdateConfig(
   if ("industry" in body) patch.industry = str(body.industry) || null;
   if ("businessContext" in body) patch.business_context = str(body.businessContext) || null;
   if ("welcomeMessage" in body) patch.welcome_message = str(body.welcomeMessage) || null;
+  if ("assistantHeaderMessage" in body) patch.assistant_header_message = str(body.assistantHeaderMessage) || null;
   if ("tone" in body) patch.tone = str(body.tone) || null;
   if ("defaultTicketPriority" in body) {
     const p = str(body.defaultTicketPriority);

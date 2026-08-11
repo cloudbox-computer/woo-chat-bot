@@ -111,6 +111,7 @@ const wantTables = [
 const wantScopeCols = ["scope", "refusal_message"];
 const wantTenantCols = ["support_email", "ticket_prefix"];
 const wantTenantCols3 = ["industry", "avatar_url", "onboarding_complete", "default_ticket_priority", "auto_ticket_categories"];
+const wantTenantCols4 = ["assistant_header_message"];
 const wantChatbotCols = ["public_id"];
 const wantSeeds = ["ivy-pearls", "ntm-associates"];
 
@@ -124,6 +125,9 @@ console.log(
 );
 console.log(
   "tenants cols3  : " + wantTenantCols3.map((c) => `${c}${tenantCols.has(c) ? " ✓" : " MISSING"}`).join(", "),
+);
+console.log(
+  "tenants cols4  : " + wantTenantCols4.map((c) => `${c}${tenantCols.has(c) ? " ✓" : " MISSING"}`).join(", "),
 );
 console.log(
   "chatbots cols  : " + wantChatbotCols.map((c) => `${c}${chatbotCols.has(c) ? " ✓" : " MISSING"}`).join(", "),
@@ -175,8 +179,9 @@ await run(`
   alter table tenants add column if not exists refusal_message text;
   alter table tenants add column if not exists support_email text;
   alter table tenants add column if not exists ticket_prefix text;
+  alter table tenants add column if not exists assistant_header_message text;
 `);
-console.log("0. tenants.scope / refusal_message / support_email / ticket_prefix columns ensured.");
+console.log("0. tenants.scope / refusal_message / support_email / ticket_prefix / assistant_header_message columns ensured.");
 
 await run(tablesDdl);
 console.log("1. Tables + indexes applied (idempotent).");
@@ -188,7 +193,8 @@ if (existingSlugs.has("ivy-pearls")) {
       scope = '{"allowedTopics":["products","jewellery","orders","shipping","returns","payments","sizing","jewellery_care","gifts","store"],"securityLevel":"extra-strict","useModelClassifier":false}'::jsonb,
       refusal_message = 'I''m sorry, I can only help with Ivy & Pearls products, orders, delivery, returns and other services provided by Ivy & Pearls.',
       support_email = coalesce(support_email, 'support@ivyandpearls.co.uk'),
-      ticket_prefix = coalesce(ticket_prefix, 'IP')
+      ticket_prefix = coalesce(ticket_prefix, 'IP'),
+      assistant_header_message = coalesce(assistant_header_message, null)
     where slug = 'ivy-pearls';
   `);
   console.log("2. Ivy & Pearls seed: already present -> policy upsert.");

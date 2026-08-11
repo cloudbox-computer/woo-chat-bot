@@ -167,6 +167,7 @@ export class SupabaseDb implements Db {
       currency: String(row.currency ?? "GBP"),
       storeUrl: row.store_url ? String(row.store_url) : undefined,
       welcomeMessage: String(row.welcome_message ?? ""),
+      assistantHeaderMessage: row.assistant_header_message ? String(row.assistant_header_message) : undefined,
       tone: row.tone ? String(row.tone) : undefined,
       brandColour: row.brand_colour ? String(row.brand_colour) : undefined,
       businessContext: row.business_context ? String(row.business_context) : undefined,
@@ -199,7 +200,7 @@ export class SupabaseDb implements Db {
     const bot = await this.getChatbot(chatbotId);
     if (!bot) return null;
     const rows = await this.get<Record<string, unknown>>("tenants", {
-      select: "id,slug,name,currency,store_url,welcome_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(credentials)",
+      select: "id,slug,name,currency,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(credentials)",
       id: `eq.${bot.tenantId}`,
       limit: "1",
     });

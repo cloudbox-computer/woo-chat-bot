@@ -26,6 +26,7 @@ function publicConfig(
   tenant: {
     name: string;
     welcomeMessage?: string;
+    assistantHeaderMessage?: string;
     brandColour?: string;
     storeUrl?: string;
     privacyPolicyUrl?: string;
@@ -36,10 +37,10 @@ function publicConfig(
     active: true,
     name: bot.name,
     title: tenant.name || bot.name,
-    // The widget renders `subtitle` as its greeting — that is the welcome
-    // message, NOT the personality/tone (which is agent behaviour and must
-    // never be exposed in the public config).
+    // subtitle = welcome message (first chat bubble). assistantHeaderMessage
+    // is shown in the widget header under the title so they don't duplicate.
     subtitle: tenant.welcomeMessage ?? null,
+    assistantHeaderMessage: tenant.assistantHeaderMessage ?? null,
     brandColour: tenant.brandColour ?? null,
     storeUrl: tenant.storeUrl ?? null,
     // GDPR: public privacy-policy URL so the widget can link to it.

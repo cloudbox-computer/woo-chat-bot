@@ -7,6 +7,9 @@ export interface WidgetConfig {
   apiUrl: string;
   brandColour?: string;
   title?: string;
+  /** Shown under the title in the widget header bar. */
+  assistantHeaderMessage?: string;
+  /** First chat bubble shown when the conversation is empty (welcome message). */
   subtitle?: string;
   quickActions?: string[];
   customerEmail?: string;
@@ -105,7 +108,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
   const title = config.title ?? "Chat with us";
   const quickActions = config.quickActions?.length
     ? config.quickActions
-    : ["Track my order", "Gold necklaces under £100", "What's your returns policy?", "Anniversary gift ideas"];
+    : ["Track my order", "Delivery times", "Returns", "Sizing help", "Product materials", "Gift ideas"];
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -167,13 +170,13 @@ export function Widget({ config }: { config: WidgetConfig }) {
 
   const s: Record<string, React.CSSProperties> = {
     root: { fontFamily: "Inter, system-ui, -apple-system, sans-serif", position: "fixed", bottom: 24, right: 24, zIndex: 2147483000, colorScheme: "light" },
-    launcher: { width: 60, height: 60, borderRadius: 30, background: brand, color: "#fff", border: "none", cursor: "pointer", boxShadow: "0 6px 20px rgba(0,0,0,0.22)", display: "flex", alignItems: "center", justifyContent: "center", transition: "transform .15s ease" },
-    panel: { position: "fixed", bottom: 96, right: 24, width: 380, maxWidth: "calc(100vw - 32px)", height: 560, maxHeight: "calc(100vh - 120px)", background: COLORS.bg, borderRadius: 16, boxShadow: "0 12px 48px rgba(0,0,0,0.25)", display: "flex", flexDirection: "column", overflow: "hidden", border: `1px solid ${COLORS.border}` },
+    launcher: { width: 50, height: 50, borderRadius: 25, background: brand, color: "#fff", border: "none", cursor: "pointer", boxShadow: "0 6px 20px rgba(0,0,0,0.22)", display: "flex", alignItems: "center", justifyContent: "center", transition: "transform .15s ease" },
+    panel: { position: "fixed", bottom: 86, right: 24, width: 380, maxWidth: "calc(100vw - 32px)", height: 520, maxHeight: "calc(100vh - 110px)", background: COLORS.bg, borderRadius: 16, boxShadow: "0 12px 48px rgba(0,0,0,0.25)", display: "flex", flexDirection: "column", overflow: "hidden", border: `1px solid ${COLORS.border}` },
     header: { background: brand, color: "#fff", padding: "14px 16px", display: "flex", alignItems: "center", gap: 10 },
     headerText: { flex: 1 },
     title: { margin: 0, fontSize: 15, fontWeight: 600, letterSpacing: 0.2 },
     subtitle: { margin: "2px 0 0", fontSize: 12, opacity: 0.9 },
-    close: { background: "transparent", border: "none", color: "#fff", cursor: "pointer", fontSize: 18, padding: 4 },
+      close: { background: "transparent", border: "none", color: "#fff", cursor: "pointer", fontSize: 16, padding: 4 },
     body: { flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10, background: "#faf8f4" },
     bubble: { maxWidth: "82%", padding: "10px 13px", borderRadius: 14, fontSize: 14, lineHeight: 1.45, wordBreak: "break-word" },
     user: { background: brand, color: "#fff", alignSelf: "flex-end", borderBottomRightRadius: 4, whiteSpace: "pre-wrap" },
@@ -231,7 +234,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
           <div style={s.header}>
             <div style={s.headerText}>
               <p style={s.title}>{title}</p>
-              {config.subtitle ? <p style={s.subtitle}>{config.subtitle}</p> : null}
+              {config.assistantHeaderMessage ? <p style={s.subtitle}>{config.assistantHeaderMessage}</p> : null}
             </div>
             <button style={s.close} onClick={() => setOpen(false)} aria-label="Close chat">✕</button>
           </div>
@@ -397,7 +400,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
                 lineHeight: 1.5,
               }}
             >
-              🔒 We only use your email to help with your enquiry and never share it.{" "}
+              🔒 We only use your details to respond to your enquiry.{" "}
               <a
                 href={config.privacyUrl}
                 target="_blank"

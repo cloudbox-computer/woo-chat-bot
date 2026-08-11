@@ -7,6 +7,7 @@ interface PublicWidgetConfig {
   name: string;
   title: string;
   welcomeMessage?: string | null;
+  assistantHeaderMessage?: string | null;
   subtitle?: string | null;
   brandColour?: string | null;
   storeUrl?: string | null;
@@ -70,6 +71,10 @@ function init(script: HTMLScriptElement | null) {
         apiUrl,
         brandColour: data.brandColour ?? remote.brandColour ?? undefined,
         title: data.title ?? remote.title,
+        // Use the dedicated assistant header message when set; fall back to
+        // subtitle/welcomeMessage for backwards-compatibility.
+        assistantHeaderMessage:
+          data.assistantHeaderMessage ?? remote.assistantHeaderMessage ?? (remote.subtitle ?? undefined),
         subtitle: data.subtitle ?? remote.subtitle ?? remote.welcomeMessage ?? undefined,
         quickActions: data.quickActions?.split("|").map((x) => x.trim()),
         customerEmail: data.customerEmail,

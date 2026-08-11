@@ -100,6 +100,7 @@ export interface TenantConfig {
   ticketPrefix: string | null;
   brandColour: string | null;
   welcomeMessage: string | null;
+  assistantHeaderMessage: string | null;
   tone: string | null;
   businessContext: string | null;
   defaultTicketPriority: string;

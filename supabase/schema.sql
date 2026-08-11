@@ -12,6 +12,7 @@ create table if not exists tenants (
   currency    text not null default 'GBP',
   store_url   text,                              -- WooCommerce/WordPress site
   welcome_message text,
+  assistant_header_message text,              -- shown in widget header under the title
   tone        text default 'friendly and helpful',
   brand_colour text,                             -- e.g. '#9c7b4f' for widget theming
   business_context text,                         -- injected into the AI system prompt

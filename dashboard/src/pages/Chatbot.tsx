@@ -16,6 +16,7 @@ export default function ChatbotPage({
 
   const [name, setName] = React.useState("");
   const [welcome, setWelcome] = React.useState("");
+  const [assistantHeader, setAssistantHeader] = React.useState("");
   const [tone, setTone] = React.useState("");
   const [active, setActive] = React.useState(true);
 
@@ -30,6 +31,7 @@ export default function ChatbotPage({
     if (data?.tenant) {
       setName(data.tenant.name);
       setWelcome(data.tenant.welcomeMessage ?? "");
+      setAssistantHeader(data.tenant.assistantHeaderMessage ?? "");
       setTone(data.tenant.tone ?? "");
     }
     if (data?.chatbots?.[0]) setActive(data.chatbots[0].active !== false);
@@ -46,6 +48,7 @@ export default function ChatbotPage({
       const patch: Record<string, unknown> = {
         name,
         welcomeMessage: welcome,
+        assistantHeaderMessage: assistantHeader,
         tone,
       };
       if (bot) {
@@ -109,7 +112,10 @@ export default function ChatbotPage({
           <Field label="Assistant name">
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          <Field label="Welcome message" hint="Shown when a customer opens the widget.">
+          <Field label="Assistant header message" hint="Shown under the chatbot title in the widget header (separate from the welcome message in the chat body).">
+            <textarea value={assistantHeader} onChange={(e) => setAssistantHeader(e.target.value)} />
+          </Field>
+          <Field label="Welcome message" hint="Shown as the first message in the chat body when a customer opens the widget.">
             <textarea value={welcome} onChange={(e) => setWelcome(e.target.value)} />
           </Field>
           <Field label="Personality / tone">
