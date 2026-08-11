@@ -642,13 +642,27 @@ const WEBSITE_STOP_WORDS = new Set([
   "long", "much", "many", "available", "currently",
 ]);
 
+// Very light English plural → singular stemming so the WordPress REST search
+// finds the page the customer actually asked about. WP search matches exact
+// tokens, and a plural token can rank a generic page (e.g. Returns/Terms)
+// ABOVE the page the customer meant — "deliveries" must resolve to the
+// "delivery" page, "policies" to "policy", "orders" to "order", etc.
+function stemKeyword(w: string): string {
+  if (w.length <= 3) return w;
+  if (w.endsWith("ies")) return w.slice(0, -3) + "y"; // deliveries→delivery
+  if (w.endsWith("ss") || w.endsWith("us") || w.endsWith("is")) return w; // class/status/focus
+  if (w.endsWith("s")) return w.slice(0, -1); // orders→order, times→time
+  return w;
+}
+
 function extractSearchKeywords(query: string): string {
   const words = query
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
-    .filter((w) => w.length > 1 && !WEBSITE_STOP_WORDS.has(w) && !/^\d+$/.test(w));
-  return words.slice(0, 6).join(" ");
+    .filter((w) => w.length > 1 && !WEBSITE_STOP_WORDS.has(w) && !/^\d+$/.test(w))
+    .map(stemKeyword);
+  return Array.from(new Set(words)).slice(0, 6).join(" ");
 }
 
 function tenantWebsiteBase(tenant: Tenant): URL | null {

@@ -131,7 +131,7 @@ export const SERVICES_DEFAULT_TOPICS = [
 // Apple Pay / Google Pay; "policy" appears in "returns policy").
 // ---------------------------------------------------------------------------
 
-const OFF_TOPIC_PATTERNS: RegExp[] = [
+export const OFF_TOPIC_PATTERNS: RegExp[] = [
   // politics / government / war
   /\b(politics|political|politician|election|vote|voting|government|prime minister|president|parliament|brexit|military|war|warfare)\b/i,
   // news / current events
@@ -373,6 +373,7 @@ export function checkOutputGate(
   tenant: Tenant,
   policy: TenantPolicy,
   productNames: string[] = [],
+  opts?: { authoritativeContext?: boolean },
 ): GateResult {
   const r = reply.trim();
   if (!r) return { allowed: false, reason: "empty" };
@@ -398,7 +399,10 @@ export function checkOutputGate(
 
   // If the model produced an obviously off-topic reply (went off the rails),
   // discard it and fall back to the fixed refusal.
-  if (!mentionsOwnProduct && OFF_TOPIC_PATTERNS.some((p) => p.test(r))) {
+  // SKIP when authoritativeContext is true — the model's knowledge came from
+  // the store's own website, so off-topic tokens from that seeded text are
+  // legitimate (e.g. "weather" appearing in a delivery page is fine).
+  if (!opts?.authoritativeContext && !mentionsOwnProduct && OFF_TOPIC_PATTERNS.some((p) => p.test(r))) {
     return { allowed: false, reason: "off-topic" };
   }
 

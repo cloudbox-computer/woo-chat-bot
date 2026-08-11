@@ -58,7 +58,10 @@ export class OpenAiCompatibleProvider implements AiProvider {
   }): Promise<ChatCompletionResult> {
     const messages: Array<Record<string, unknown>> = [{ role: "system", content: opts.system }];
     if (opts.knowledgeContext) {
-      messages.push({ role: "system", content: `Store knowledge (use it to answer accurately):\n${opts.knowledgeContext}` });
+      messages.push({
+        role: "system",
+        content: `Store knowledge from the store's own website (treat as authoritative facts — answer the customer's question directly from it, never refuse):\n${opts.knowledgeContext}`,
+      });
     }
     for (const h of opts.history) messages.push({ role: h.role, content: h.content });
     messages.push({ role: "user", content: opts.userMessage });

@@ -21,7 +21,7 @@ export const MAX_TOOL_TURNS = 6;
 // When a message matches, seedKnowledge also pulls the tenant's website so the
 // model always has real, current data — deterministic and multi-tenant safe.
 const STORE_INFO_QUERY_RE =
-  /\b(delivery|shipping|dispatch|postage|tracking|return|refund|exchange|cancel|care|cleaning|clean|tarnish|polish|size guide|sizing|warranty|guarantee|faq|contact|payment|terms|policy|how long|estimated arrival|delivered)\b/i;
+  /\b(delivery|deliveries|delivering|shipping|dispatch|postage|tracking|return|refund|exchange|cancel|care|cleaning|clean|tarnish|polish|size guide|sizing|warranty|guarantee|faq|contact|payment|terms|policy|how long|estimated arrival|delivered)\b/i;
 
 // convo5 — GDPR / account-gated flows.
 //
@@ -198,7 +198,9 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   }
   transcript.push({ role: "user", content: req.message });
 
-  const knowledgeContext = await seedKnowledge(db, tenant, chatbotId, req.message);
+  const knowledgeSeed = await seedKnowledge(db, tenant, chatbotId, req.message);
+  const knowledgeContext = knowledgeSeed.context;
+  const storeInfoSeeded = knowledgeSeed.websiteSeeded;
 
   let finalContent = "";
   let products: Product[] = [];
@@ -206,6 +208,9 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   let echoRecoveries = 0;
   // Deterministic cart-op routing: at most one forced tool call per request.
   let deterministicRouted = false;
+  // Store-info refusal recovery: the store's own website content is seeded
+  // deterministically, so if the model still refuses, nudge it once (bounded).
+  let storeInfoRefusalRetried = false;
 
   for (;;) {
     const last = transcript[transcript.length - 1];
@@ -282,6 +287,21 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
       }
     }
 
+    // Store-info questions (delivery times, returns, care, FAQ…) are seeded
+    // deterministically with the store's OWN website content, so the answer
+    // must not be a refusal. A flash model occasionally echoes the fixed
+    // refusal (e.g. when a KB entry says "not stored here — never invent").
+    // Detect that and nudge it once to answer from the provided content.
+    if (storeInfoSeeded && !storeInfoRefusalRetried && looksLikeRefusal(text, policy)) {
+      storeInfoRefusalRetried = true;
+      transcript.push({
+        role: "user",
+        content:
+          "The store's own website content containing the answer has already been provided to you in the system message. Answer the customer's question directly using ONLY that content. Do not refuse — give the answer now.",
+      });
+      continue;
+    }
+
     finalContent = text || fallbackReply(products, tenant.currency);
     break;
   }
@@ -290,8 +310,9 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
 
   // Gate 5 — output gate (response validator): if the model went out of scope
   // (leaked internals, mentioned another tenant, or answered off-topic),
-  // discard the reply and send the fixed refusal instead.
-  const output = checkOutputGate(reply, tenant, policy, dedupeProducts(products).map((p) => p.name));
+  const output = checkOutputGate(reply, tenant, policy, dedupeProducts(products).map((p) => p.name), {
+    authoritativeContext: storeInfoSeeded,
+  });
   const finalReply = output.allowed ? reply : refusalReply(policy);
 
   // Persist
@@ -355,6 +376,7 @@ function buildSystemPrompt(tenant: Tenant, policy: TenantPolicy): string {
     "- When a customer wants to track an order, call track_order. Never guess a status.",
     "- When search results contain products, present them with name and price, and mention availability.",
     "- For delivery times, returns policy, care & cleaning guides, size guide, FAQ or other store information not covered by the knowledge base, call search_website to look it up on the store's own website.",
+    "- When the store's own website content has already been provided to you in the system message, answer the customer's store-information question DIRECTLY from that content. Never refuse a delivery, returns, care or FAQ question when that content is available — use it.",
     "- NEVER browse, link to, quote from or mention any website other than the store's own website.",
     "- Keep replies concise and in British English. Use £ for prices.",
     "- Format replies with Markdown where it improves readability: **bold** for key terms, bullet or numbered lists for steps/options/details, ## headings for longer answers, and tables for comparisons. Use plain sentences for short answers — don't over-format.",
@@ -378,8 +400,14 @@ function buildSystemPrompt(tenant: Tenant, policy: TenantPolicy): string {
   ].join("\n");
 }
 
-async function seedKnowledge(db: Db, tenant: Tenant, chatbotId: string, message: string): Promise<string | undefined> {
+async function seedKnowledge(
+  db: Db,
+  tenant: Tenant,
+  chatbotId: string,
+  message: string,
+): Promise<{ context: string | undefined; websiteSeeded: boolean }> {
   const parts: string[] = [];
+  let websiteSeeded = false;
 
   // 1) Knowledge base (guidance + any store-curated entries).
   try {
@@ -401,13 +429,14 @@ async function seedKnowledge(db: Db, tenant: Tenant, chatbotId: string, message:
       const res = await searchTenantWebsite(tenant, { query: message }, { limit: 2 });
       if (res.ok && res.text) {
         parts.push(`Store website (the store's own site — use this as authoritative):\n${res.text}`);
+        websiteSeeded = true;
       }
     } catch {
       // ignore — fall back to knowledge base only
     }
   }
 
-  return parts.length ? parts.join("\n\n---\n\n") : undefined;
+  return { context: parts.length ? parts.join("\n\n---\n\n") : undefined, websiteSeeded };
 }
 
 /**
@@ -436,6 +465,19 @@ function detectDeterministicTool(message: string, toolNames: Set<string>) {
 function looksLikeToolCallEcho(text: string): boolean {
   const t = text.trim();
   return t.startsWith("tool:") || t.includes("<tool_call") || t.includes("</tool_call>");
+}
+
+/**
+ * True when the model echoed the fixed refusal (or a refusal-style reply).
+ * Used to recover store-info answers — if the store's website content was
+ * seeded, a refusal is never acceptable and we nudge the model once.
+ */
+function looksLikeRefusal(text: string, policy: TenantPolicy): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+  const refusal = policy.refusalMessage.toLowerCase();
+  if (t === refusal || t.includes(refusal) || refusal.includes(t)) return true;
+  return /i('?m| am) sorry,? i can only help|i can'?t (answer|help)|i cannot (answer|help)|not (be )?able to answer|i'?m not able to|can'?t help (you )?with/i.test(t);
 }
 
 function fallbackReply(products: Product[], currency = "GBP"): string {
