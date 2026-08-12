@@ -214,7 +214,7 @@ export async function handleOnboarding(req: Request): Promise<Response> {
 const ANALYZE_SYSTEM_PROMPT = `You are an expert at analyzing e-commerce websites and extracting business information for chatbot onboarding.
 
 Given a website, analyze it and return ONLY valid JSON (no markdown, no explanation, no code blocks) with this exact shape:
-{"name":"Business name","industry":"Industry name","businessContext":"Key business details like shipping, returns, products","botName":"Suggested assistant name","welcomeMessage":"A friendly welcome message for customers","tone":"friendly","brandColour":null,"allowedTopics":["products","orders","returns","support"],"securityLevel":"strict","knowledge":[{"title":"FAQ Title","content":"Answer content","keywords":["keyword1","keyword2"]}]}`;
+{"name":"Business name","industry":"Industry name","businessContext":"Key business details like shipping, returns, products","botName":"Suggested assistant name","welcomeMessage":"A friendly welcome message for customers","tone":"friendly","brandColour":"#hexcolor","allowedTopics":["products","orders","returns","support"],"securityLevel":"strict","knowledge":[{"title":"FAQ Title","content":"Answer content","keywords":["keyword1","keyword2"]}]}`;
 
 interface AnalyzeWebsiteInput {
   url: string;
@@ -240,6 +240,9 @@ async function scrapeWebsite(url: string): Promise<string> {
     url.startsWith("https://") ? url.replace("https://", "http://") : url,
   ];
 
+  let cssColors: string[] = [];
+  let ogColor: string | null = null;
+
   for (const tryUrl of urlsToTry) {
     try {
       const res = await fetch(tryUrl, {
@@ -255,6 +258,42 @@ async function scrapeWebsite(url: string): Promise<string> {
       if (!res.ok) continue;
 
       const html = await res.text();
+
+      // Extract Open Graph color if present
+      const ogColorMatch = html.match(/<meta\s+property="og:color"\s+content="([^"]+)"/i);
+      if (ogColorMatch) ogColor = ogColorMatch[1];
+
+      // Extract hex colors from inline styles
+      const inlineStyles = html.match(/style="([^"]*)"/g) || [];
+      for (const style of inlineStyles) {
+        const colorMatch = style.match(/(?:#|color|background|bgcolor)\s*[:=]\s*(#[0-9a-fA-F]{3,8})/i);
+        if (colorMatch && !cssColors.includes(colorMatch[1])) {
+          cssColors.push(colorMatch[1]);
+        }
+      }
+
+      // Extract colors from <style> blocks
+      const styleBlocks = html.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || [];
+      for (const block of styleBlocks) {
+        const hexMatches = block.match(/#[0-9a-fA-F]{3,8}/g) || [];
+        for (const hex of hexMatches) {
+          if (!cssColors.includes(hex)) cssColors.push(hex);
+        }
+      }
+
+      // Extract colors from CSS color() functions
+      const colorFnMatches = html.match(/color\s*\([^)]+\)/gi) || [];
+      for (const fn of colorFnMatches) {
+        const rgbMatch = fn.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/i);
+        if (rgbMatch) {
+          const r = parseInt(rgbMatch[1]).toString(16).padStart(2, "0");
+          const g = parseInt(rgbMatch[2]).toString(16).padStart(2, "0");
+          const b = parseInt(rgbMatch[3]).toString(16).padStart(2, "0");
+          const hex = `#${r}${g}${b}`;
+          if (!cssColors.includes(hex)) cssColors.push(hex);
+        }
+      }
+
       const text = html
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
@@ -263,7 +302,12 @@ async function scrapeWebsite(url: string): Promise<string> {
         .replace(/\s+/g, " ")
         .trim();
 
-      return text.slice(0, 8000);
+      // Append CSS colors info for the AI to consider
+      const uniqueColors = [...new Set(cssColors)].slice(0, 10);
+      const colorInfo = uniqueColors.length > 0 ? `\n\nCSS_COLORS: ${uniqueColors.join(", ")}` : "";
+      const ogInfo = ogColor ? `\nOG_COLOR: ${ogColor}` : "";
+
+      return (text + colorInfo + ogInfo).slice(0, 8000);
     } catch {
       continue;
     }
