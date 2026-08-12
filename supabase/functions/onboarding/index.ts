@@ -20,7 +20,8 @@
 //   }
 import { DashboardError, authUserFromRequest, embedScriptFor, slugify } from "../_shared/dashboard.ts";
 import { handleOptions, json } from "../_shared/cors.ts";
-import { env, supabaseConfig } from "../_shared/env.ts";
+import { env, supabaseConfig, aiConfig, modelFor } from "../_shared/env.ts";
+import { OpenAiCompatibleProvider } from "../_shared/ai.ts";
 
 interface WizardKnowledge {
   title: string;
@@ -206,8 +207,184 @@ export async function handleOnboarding(req: Request): Promise<Response> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Analyze website handler
+// ---------------------------------------------------------------------------
+
+const ANALYZE_SYSTEM_PROMPT = `You are an expert at analyzing e-commerce websites and extracting business information for chatbot onboarding.
+
+Given a website, analyze it and return ONLY valid JSON (no markdown, no explanation, no code blocks) with this exact shape:
+{"name":"Business name","industry":"Industry name","businessContext":"Key business details like shipping, returns, products","botName":"Suggested assistant name","welcomeMessage":"A friendly welcome message for customers","tone":"friendly","brandColour":null,"allowedTopics":["products","orders","returns","support"],"securityLevel":"strict","knowledge":[{"title":"FAQ Title","content":"Answer content","keywords":["keyword1","keyword2"]}]}`;
+
+interface AnalyzeWebsiteInput {
+  url: string;
+}
+
+interface AnalyzeWebsiteOutput {
+  name: string;
+  industry?: string;
+  businessContext?: string;
+  botName?: string;
+  welcomeMessage?: string;
+  tone?: string;
+  brandColour?: string;
+  allowedTopics?: string[];
+  securityLevel?: string;
+  knowledge?: Array<{ title: string; content: string; keywords?: string[] }>;
+}
+
+async function scrapeWebsite(url: string): Promise<string> {
+  const urlsToTry = [
+    url,
+    url.replace(/\/$/, ""),
+    url.startsWith("https://") ? url.replace("https://", "http://") : url,
+  ];
+
+  for (const tryUrl of urlsToTry) {
+    try {
+      const res = await fetch(tryUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; ChatBotHelper/1.0)",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.5",
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!res.ok) continue;
+
+      const html = await res.text();
+      const text = html
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+        .replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      return text.slice(0, 8000);
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error("Could not fetch the website");
+}
+
+async function handleAnalyzeWebsite(req: Request): Promise<Response> {
+  const user = authUserFromRequest(req);
+  if (!user) throw new DashboardError("Not authenticated", 401);
+
+  const body = (await req.json().catch(() => ({}))) as AnalyzeWebsiteInput;
+  const url = (body.url ?? "").trim();
+  if (!url) throw new DashboardError("Website URL is required");
+
+  try {
+    new URL(url);
+  } catch {
+    throw new DashboardError("Invalid URL format");
+  }
+
+  const aiCfg = aiConfig();
+  const provider = new OpenAiCompatibleProvider({
+    name: aiCfg.provider,
+    apiKey: aiCfg.openaiKey ?? aiCfg.geminiKey ?? "",
+    baseUrl: aiCfg.openaiBaseUrl,
+  });
+
+  let websiteContent: string;
+  try {
+    websiteContent = await scrapeWebsite(url);
+  } catch (err) {
+    throw new DashboardError(err instanceof Error ? err.message : "Failed to scrape website");
+  }
+
+  if (!websiteContent || websiteContent.length < 100) {
+    throw new DashboardError("Website content too short to analyze. Try a different URL.");
+  }
+
+  const model = modelFor(aiCfg.provider, aiCfg);
+
+  let result: AnalyzeWebsiteOutput;
+  try {
+    const chatResult = await provider.chat({
+      model,
+      system: ANALYZE_SYSTEM_PROMPT,
+      history: [],
+      userMessage: `Analyze this website content and extract business information:\n\n${websiteContent}`,
+      tools: [],
+    });
+
+    let rawContent = chatResult.content?.trim() ?? "";
+
+    // Strip markdown code fences if present
+    rawContent = rawContent.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/g, "");
+
+    // Try to extract valid JSON by finding the last closing brace
+    // This handles cases where the AI appends text after the JSON
+    let jsonStr = rawContent;
+    const lastBrace = rawContent.lastIndexOf("}");
+    if (lastBrace > 0) {
+      jsonStr = rawContent.slice(0, lastBrace + 1);
+    }
+
+    try {
+      result = JSON.parse(jsonStr) as AnalyzeWebsiteOutput;
+    } catch {
+      // Try extracting just the first JSON object
+      const jsonMatch = rawContent.match(/\{[\s\S]*?\}/);
+      if (jsonMatch) {
+        result = JSON.parse(jsonMatch[0]) as AnalyzeWebsiteOutput;
+      } else {
+        throw new DashboardError("AI returned invalid JSON response");
+      }
+    }
+  } catch (err) {
+    if (err instanceof DashboardError) throw err;
+    throw new DashboardError(err instanceof Error ? err.message : "AI analysis failed");
+  }
+
+  if (!result.name) {
+    throw new DashboardError("Could not extract business name from website");
+  }
+
+  return json({
+    success: true,
+    data: {
+      name: result.name,
+      industry: result.industry,
+      businessContext: result.businessContext,
+      botName: result.botName,
+      welcomeMessage: result.welcomeMessage,
+      tone: result.tone,
+      brandColour: result.brandColour,
+      allowedTopics: result.allowedTopics,
+      securityLevel: result.securityLevel,
+      knowledge: result.knowledge,
+    },
+  });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleOptions();
+
+  const url = new URL(req.url);
+  const path = url.pathname;
+
+  // Route: /onboarding/analyze
+  if (path === "/onboarding/analyze" || path === "/onboarding/analyze/") {
+    if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+    try {
+      return await handleAnalyzeWebsite(req);
+    } catch (err) {
+      console.error("analyze website error", err);
+      if (err instanceof DashboardError) return json({ error: err.message }, err.status);
+      return json({ error: "Internal error" }, 500);
+    }
+  }
+
+  // Route: /onboarding (original)
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
   try {
     return await handleOnboarding(req);

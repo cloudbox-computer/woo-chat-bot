@@ -76,6 +76,19 @@ export interface OnboardingResult {
   next: string;
 }
 
+export interface WebsiteAnalyzeData {
+  name: string;
+  industry?: string;
+  businessContext?: string;
+  botName?: string;
+  welcomeMessage?: string;
+  tone?: string;
+  brandColour?: string;
+  allowedTopics?: string[];
+  securityLevel?: string;
+  knowledge?: Array<{ title: string; content: string; keywords?: string[] }>;
+}
+
 export interface OverviewData {
   conversations: number;
   tickets: number;
@@ -157,6 +170,13 @@ export function runOnboarding(input: OnboardingInput): Promise<OnboardingResult>
   return request<OnboardingResult>("/onboarding", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export function analyzeWebsite(url: string): Promise<{ data: WebsiteAnalyzeData }> {
+  return request<{ data: WebsiteAnalyzeData }>("/onboarding/analyze", {
+    method: "POST",
+    body: JSON.stringify({ url }),
   });
 }
 

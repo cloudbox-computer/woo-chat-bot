@@ -69,10 +69,12 @@ export class OpenAiCompatibleProvider implements AiProvider {
     const body: Record<string, unknown> = {
       model: opts.model,
       messages,
-      tools: opts.tools,
-      tool_choice: "auto",
-      max_tokens: 600,
+      max_tokens: 2000,
     };
+    if (opts.tools && opts.tools.length > 0) {
+      body.tools = opts.tools;
+      body.tool_choice = "auto";
+    }
 
     const res = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",

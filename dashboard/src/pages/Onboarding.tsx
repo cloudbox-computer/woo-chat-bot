@@ -1,5 +1,5 @@
 import React from "react";
-import { runOnboarding, type OnboardingInput, type OnboardingResult } from "../lib/api";
+import { runOnboarding, analyzeWebsite, type OnboardingInput, type OnboardingResult } from "../lib/api";
 import { supabase } from "../lib/supabase";
 import { toast } from "../components/ui";
 
@@ -83,6 +83,8 @@ export default function Onboarding() {
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState<OnboardingResult | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [analyzing, setAnalyzing] = React.useState(false);
+  const [analyzeError, setAnalyzeError] = React.useState<string | null>(null);
 
   const set = <K extends keyof WizardState>(key: K, value: WizardState[K]) =>
     setState((s) => ({ ...s, [key]: value }));
@@ -159,6 +161,44 @@ export default function Onboarding() {
     await supabase.auth.signOut();
   }
 
+  async function handleAnalyzeWebsite() {
+    const url = state.website.trim();
+    if (!url) {
+      setAnalyzeError("Please enter a website URL first");
+      return;
+    }
+    setAnalyzing(true);
+    setAnalyzeError(null);
+    try {
+      const res = await analyzeWebsite(url);
+      const data = res.data;
+      if (data.name) set("name", data.name);
+      if (data.industry) set("industry", data.industry);
+      if (data.businessContext) set("businessContext", data.businessContext);
+      if (data.botName) set("botName", data.botName);
+      if (data.welcomeMessage) set("welcomeMessage", data.welcomeMessage);
+      if (data.tone && TONES.includes(data.tone)) set("tone", data.tone);
+      if (data.brandColour) set("brandColour", data.brandColour);
+      if (data.allowedTopics?.length) set("allowedTopics", data.allowedTopics);
+      if (data.securityLevel === "standard" || data.securityLevel === "strict" || data.securityLevel === "extra-strict") {
+        set("securityLevel", data.securityLevel as WizardState["securityLevel"]);
+      }
+      if (data.knowledge?.length) {
+        setState((s) => ({
+          ...s,
+          knowledge: data.knowledge!.map((k) => ({ title: k.title, content: k.content })),
+        }));
+      }
+      toast("ok", "Website analyzed — fields have been filled in");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to analyze website";
+      setAnalyzeError(msg);
+      toast("err", msg);
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
   const canNext =
     step === 0 ? state.name.trim().length > 0 :
     step === 5 ? state.supportEmail.trim().length === 0 || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(state.supportEmail) :
@@ -192,7 +232,24 @@ export default function Onboarding() {
             </div>
             <div className="field">
               <label>Website</label>
-              <input type="url" value={state.website} onChange={(e) => set("website", e.target.value)} placeholder="https://ivyandpearls.co.uk" />
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="url"
+                  value={state.website}
+                  onChange={(e) => set("website", e.target.value)}
+                  placeholder="https://ivyandpearls.co.uk"
+                  style={{ flex: 1 }}
+                />
+                <button
+                  className="btn secondary sm"
+                  onClick={handleAnalyzeWebsite}
+                  disabled={analyzing || !state.website.trim()}
+                  title="Let AI analyze this website and fill in the form"
+                >
+                  {analyzing ? "Analyzing…" : "🔍 Analyze"}
+                </button>
+              </div>
+              {analyzeError && <div className="hint" style={{ color: "var(--red)", marginTop: 4 }}>{analyzeError}</div>}
             </div>
             <div className="field">
               <label>Industry</label>

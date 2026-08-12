@@ -24,5 +24,8 @@ verify_jwt = false
 [functions.onboarding]
 verify_jwt = true
 
+[functions.onboarding_analyze]
+verify_jwt = true
+
 [functions.dashboard]
 verify_jwt = true
