@@ -227,10 +227,6 @@ export default function Onboarding() {
             <h2>Tell us about your business</h2>
             <p className="step-desc">This powers your assistant's knowledge and tone.</p>
             <div className="field">
-              <label>Business name *</label>
-              <input type="text" value={state.name} onChange={(e) => set("name", e.target.value)} placeholder="Ivy & Pearls" />
-            </div>
-            <div className="field">
               <label>Website</label>
               <div style={{ display: "flex", gap: 8 }}>
                 <input
@@ -250,6 +246,10 @@ export default function Onboarding() {
                 </button>
               </div>
               {analyzeError && <div className="hint" style={{ color: "var(--red)", marginTop: 4 }}>{analyzeError}</div>}
+            </div>
+            <div className="field">
+              <label>Business name *</label>
+              <input type="text" value={state.name} onChange={(e) => set("name", e.target.value)} placeholder="Ivy & Pearls" />
             </div>
             <div className="field">
               <label>Industry</label>

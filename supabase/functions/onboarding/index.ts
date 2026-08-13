@@ -213,8 +213,22 @@ export async function handleOnboarding(req: Request): Promise<Response> {
 
 const ANALYZE_SYSTEM_PROMPT = `You are an expert at analyzing e-commerce websites and extracting business information for chatbot onboarding.
 
-Given a website, analyze it and return ONLY valid JSON (no markdown, no explanation, no code blocks) with this exact shape:
+Given a website's structured content, extract accurate business information and return ONLY valid JSON (no markdown, no explanation, no code blocks) with this exact shape:
 {"name":"Business name","industry":"Industry name","businessContext":"Key business details like shipping, returns, products","botName":"Suggested assistant name","welcomeMessage":"A friendly welcome message for customers","tone":"friendly","brandColour":"#hexcolor","allowedTopics":["products","orders","returns","support"],"securityLevel":"strict","knowledge":[{"title":"FAQ Title","content":"Answer content","keywords":["keyword1","keyword2"]}]}`;
+
+// Notes for the AI - CRITICAL:
+// 1. ACCURACY: Extract information DIRECTLY from the provided content. Do NOT invent or assume anything.
+// 2. INDUSTRY: Must be a real industry category (e.g., "Fashion & Apparel", "Footwear", "Electronics", "Beauty & Cosmetics"). NEVER guess "Health & Wellness" unless the site literally sells health products/supplements.
+// 3. PRODUCT BASED: If the site sells physical goods, use the product category as industry (e.g., shoes -> "Footwear", jewelry -> "Fashion & Accessories").
+// 4. BUSINESS CONTEXT: Base this ONLY on what the content says. Include shipping info, return policies, key products mentioned.
+// 5. BRAND_COLORS are colors from CSS custom properties like --primary, --brand, --accent, --cta (highest confidence)
+// 6. CSS_COLORS are all other hex colors found in stylesheets (lower confidence)
+// 7. ALWAYS choose the PRIMARY brand colour from BRAND_COLORS first - these are most reliable
+// 8. Look for colors associated with .primary, .btn, .button, .cta classes (brand context)
+// 9. The brand colour should be the main accent colour - the one used for buttons, links, and key CTAs
+// 10. NEVER choose neutral colours: black (#000000, #111111), white (#ffffff), greys (#333333, #888888), or near-whites
+// 11. If a site has a clear primary brand colour (e.g., #4c1d95 for purple, #0066cc for blue), use THAT
+// 12. For sites with green/yellow themes, use that distinctive brand colour
 
 interface AnalyzeWebsiteInput {
   url: string;
@@ -242,6 +256,12 @@ async function scrapeWebsite(url: string): Promise<string> {
 
   let cssColors: string[] = [];
   let ogColor: string | null = null;
+  let brandColors: Map<string, number> = new Map(); // hex -> score
+  let cssContent = "";
+  let pageTitle = "";
+  let metaDescription = "";
+  let headings: string[] = [];
+  let productCategories: string[] = [];
 
   for (const tryUrl of urlsToTry) {
     try {
@@ -258,62 +278,259 @@ async function scrapeWebsite(url: string): Promise<string> {
       if (!res.ok) continue;
 
       const html = await res.text();
+      cssContent += extractCssFromHtml(html);
 
       // Extract Open Graph color if present
       const ogColorMatch = html.match(/<meta\s+property="og:color"\s+content="([^"]+)"/i);
       if (ogColorMatch) ogColor = ogColorMatch[1];
 
-      // Extract hex colors from inline styles
-      const inlineStyles = html.match(/style="([^"]*)"/g) || [];
-      for (const style of inlineStyles) {
-        const colorMatch = style.match(/(?:#|color|background|bgcolor)\s*[:=]\s*(#[0-9a-fA-F]{3,8})/i);
-        if (colorMatch && !cssColors.includes(colorMatch[1])) {
-          cssColors.push(colorMatch[1]);
+      // Extract page title
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      if (titleMatch && !pageTitle) pageTitle = titleMatch[1].trim();
+
+      // Extract meta description
+      const descMatch = html.match(/<meta\s+name=["']description["']\s+content=["']([^"']+)["']/i);
+      if (descMatch && !metaDescription) metaDescription = descMatch[1].trim();
+
+      // Extract headings (H1, H2, H3)
+      const headingMatches = html.matchAll(/<(h[1-3])[^>]*>([^<]+)<\/h\1>/gi) || [];
+      for (const match of headingMatches) {
+        const text = match[2].trim();
+        if (text && text.length > 0 && text.length < 200) {
+          headings.push(text);
         }
       }
 
-      // Extract colors from <style> blocks
-      const styleBlocks = html.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || [];
-      for (const block of styleBlocks) {
-        const hexMatches = block.match(/#[0-9a-fA-F]{3,8}/g) || [];
-        for (const hex of hexMatches) {
-          if (!cssColors.includes(hex)) cssColors.push(hex);
+      // Extract product categories (common patterns in e-commerce)
+      const categoryPatterns = [
+        /product-category\/([^"']+)[/"']?/gi,
+        /\b(CATEGORY|CATEGORIES)\s*[:]\s*([^<]+)/gi,
+      ];
+      for (const pattern of categoryPatterns) {
+        const matches = html.matchAll(pattern);
+        for (const m of matches) {
+          const cat = m[0].replace(/category/gi, "").trim();
+          if (cat && cat.length > 2 && !productCategories.includes(cat)) {
+            productCategories.push(cat);
+          }
         }
       }
 
-      // Extract colors from CSS color() functions
-      const colorFnMatches = html.match(/color\s*\([^)]+\)/gi) || [];
-      for (const fn of colorFnMatches) {
-        const rgbMatch = fn.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/i);
-        if (rgbMatch) {
-          const r = parseInt(rgbMatch[1]).toString(16).padStart(2, "0");
-          const g = parseInt(rgbMatch[2]).toString(16).padStart(2, "0");
-          const b = parseInt(rgbMatch[3]).toString(16).padStart(2, "0");
-          const hex = `#${r}${g}${b}`;
-          if (!cssColors.includes(hex)) cssColors.push(hex);
+      // Also try to fetch linked CSS files for more complete color analysis
+      const linkMatches = html.matchAll(/<link\s[^>]*href=["']([^"']*\.css["'])/gi) || [];
+      for (const match of linkMatches) {
+        try {
+          const cssUrl = new URL(match[1], tryUrl).toString();
+          const cssRes = await fetch(cssUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (compatible; ChatBotHelper/1.0)",
+              "Accept": "text/css,*/*;q=0.1",
+            },
+            signal: AbortSignal.timeout(5000),
+          });
+          if (cssRes.ok) {
+            cssContent += await cssRes.text();
+          }
+        } catch {
+          // Skip CSS fetch errors
         }
       }
-
-      const text = html
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-        .replace(/<!--[\s\S]*?-->/g, "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      // Append CSS colors info for the AI to consider
-      const uniqueColors = [...new Set(cssColors)].slice(0, 10);
-      const colorInfo = uniqueColors.length > 0 ? `\n\nCSS_COLORS: ${uniqueColors.join(", ")}` : "";
-      const ogInfo = ogColor ? `\nOG_COLOR: ${ogColor}` : "";
-
-      return (text + colorInfo + ogInfo).slice(0, 8000);
     } catch {
       continue;
     }
   }
 
-  throw new Error("Could not fetch the website");
+  // Parse all collected CSS to extract colors
+  cssColors = extractColorsFromCss(cssContent);
+
+  // Score colors based on context (brand-like names get higher scores)
+  brandColors = scoreBrandColors(cssContent, cssColors);
+
+  const text = stripHtmlAndScripts(cssContent);
+
+  // Append CSS colors info for the AI to consider - sorted by brand score
+  const allScores = [...brandColors.entries()].sort((a, b) => b[1] - a[1]);
+  const sortedColors = allScores.slice(0, 10).map(([hex]) => hex);
+  const uniqueColors = [...new Set(cssColors)].slice(0, 15);
+  const colorInfo = sortedColors.length > 0
+    ? `\n\nBRAND_COLORS (highest confidence - from CSS variables like --primary, --brand): ${sortedColors.join(", ")}`
+    : uniqueColors.length > 0
+    ? `\n\nCSS_COLORS (all detected colors): ${uniqueColors.join(", ")}`
+    : "";
+  const ogInfo = ogColor ? `\nOG_COLOR: ${ogColor}` : "";
+
+  // Build structured content for AI analysis
+  const structuredContent = [
+    pageTitle ? `PAGE_TITLE: ${pageTitle}` : null,
+    metaDescription ? `META_DESCRIPTION: ${metaDescription}` : null,
+    headings.length > 0 ? `HEADINGS (${headings.length} found):\n${headings.slice(0, 15).join("\n")}` : null,
+    productCategories.length > 0 ? `PRODUCT_CATEGORIES: ${productCategories.join(", ")}` : null,
+    text.slice(0, 8000),
+    colorInfo,
+    ogInfo,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return structuredContent;
+}
+
+// Extract all CSS from HTML (inline <style> blocks and <link> hrefs are handled separately)
+function extractCssFromHtml(html: string): string {
+  const styleBlocks = html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi) || [];
+  return Array.from(styleBlocks, ([, block]) => block).join("\n");
+}
+
+// Strip HTML tags and scripts from content
+function stripHtmlAndScripts(content: string): string {
+  return content
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Extract all hex colors from CSS content
+function extractColorsFromCss(css: string): string[] {
+  const colors = new Set<string>();
+
+  // Match hex colors (#RGB, #RRGGBB, #RRGGBBAA)
+  const hexMatches = css.matchAll(/#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/gi);
+  for (const match of hexMatches) {
+    const hex = match[0];
+    if (!hex.includes("000000") && !hex.includes("ffffff")) {
+      colors.add(hex.length === 3 ? expandShorthandHex(hex) : hex.slice(0, 7));
+    }
+  }
+
+  // Convert rgb() to hex
+  const rgbMatches = css.matchAll(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/gi);
+  for (const match of rgbMatches) {
+    const r = parseInt(match[1]).toString(16).padStart(2, "0");
+    const g = parseInt(match[2]).toString(16).padStart(2, "0");
+    const b = parseInt(match[3]).toString(16).padStart(2, "0");
+    colors.add(`#${r}${g}${b}`);
+  }
+
+  // Convert hsl() to hex
+  const hslMatches = css.matchAll(/hsla?\((\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%/gi);
+  for (const match of hslMatches) {
+    const hex = hslToHex(parseInt(match[1]), parseInt(match[2]), parseInt(match[3]));
+    if (hex) colors.add(hex);
+  }
+
+  return [...colors];
+}
+
+// Score colors based on how "brand-like" their context is
+function scoreBrandColors(css: string, colors: string[]): Map<string, number> {
+  const scoreMap = new Map<string, number>();
+
+  // Priority 1: CSS custom properties that are clearly brand-related
+  const primaryProps = [
+    '--primary', '--primary-color', '--main-color',
+    '--brand', '--brand-color', '--brand-main',
+    '--accent', '--accent-color',
+    '--cta', '--cta-color', '--button-color',
+    '--hero', '--hero-color',
+    '--color-primary', '--color-brand', '--color-accent', '--color-cta',
+  ];
+
+  // Find all CSS custom property definitions and their values
+  for (const prop of primaryProps) {
+    const propRegex = new RegExp(`${prop.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\s*:\\s*([^;]+)`, 'i');
+    const match = css.match(propRegex);
+    if (match) {
+      const value = match[1].trim();
+      // Extract hex color from value
+      const hexMatch = value.match(/#[0-9a-fA-F]{3,8}\b/i);
+      if (hexMatch) {
+        const hex = expandShorthandHex(hexMatch[0].slice(0, 7));
+        scoreMap.set(hex, (scoreMap.get(hex) || 0) + 100); // Very high priority
+      }
+      // Also check for rgb/rgba values
+      const rgbMatch = value.match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+      if (rgbMatch) {
+        const r = parseInt(rgbMatch[1]).toString(16).padStart(2, "0");
+        const g = parseInt(rgbMatch[2]).toString(16).padStart(2, "0");
+        const b = parseInt(rgbMatch[3]).toString(16).padStart(2, "0");
+        const hex = `#${r}${g}${b}`;
+        scoreMap.set(hex, (scoreMap.get(hex) || 0) + 80);
+      }
+    }
+  }
+
+  // Priority 2: Colors in brand-related class contexts
+  const brandContextPatterns = [
+    /\.primary\b.*?\{[^}]*color[^}]*\}/gi,
+    /\.btn\b.*?\{[^}]*background[^}]*\}/gi,
+    /\.button\b.*?\{[^}]*background[^}]*\}/gi,
+    /\.cta\b.*?\{[^}]*background[^}]*\}/gi,
+    /\.accent\b.*?\{[^}]*[^}]*\}/gi,
+  ];
+
+  for (const pattern of brandContextPatterns) {
+    const matches = css.matchAll(pattern);
+    for (const match of matches) {
+      const block = match[0];
+      // Find colors in this block
+      const hexMatches = block.matchAll(/#[0-9a-fA-F]{3,8}\b/gi);
+      for (const hm of hexMatches) {
+        const hex = expandShorthandHex(hm[0].slice(0, 7));
+        scoreMap.set(hex, (scoreMap.get(hex) || 0) + 20);
+      }
+    }
+  }
+
+  // Priority 3: General occurrence counting (lower weight)
+  for (const hex of colors) {
+    const occurrences = (css.match(new RegExp(hex.replace("#", ""), "gi")) || []).length;
+    if (occurrences > 0 && !scoreMap.has(hex)) {
+      scoreMap.set(hex, occurrences * 2);
+    }
+  }
+
+  return scoreMap;
+}
+
+// Expand shorthand hex (#abc -> #aabbcc)
+function expandShorthandHex(hex: string): string {
+  if (hex.length === 4) {
+    return `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`;
+  }
+  return hex;
+}
+
+// Convert hex to rgb string for matching
+function cssToRgb(hex: string): string {
+  const clean = hex.replace("#", "");
+  if (clean.length === 3) {
+    const r = parseInt(clean[0] + clean[0], 16);
+    const g = parseInt(clean[1] + clean[1], 16);
+    const b = parseInt(clean[2] + clean[2], 16);
+    return `${r}, ${g}, ${b}`;
+  } else if (clean.length === 6) {
+    const r = parseInt(clean.substring(0, 2), 16);
+    const g = parseInt(clean.substring(2, 4), 16);
+    const b = parseInt(clean.substring(4, 6), 16);
+    return `${r}, ${g}, ${b}`;
+  }
+  return "";
+}
+
+// Convert HSL to hex
+function hslToHex(h: number, s: number, l: number): string | null {
+  s /= 100;
+  l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color).toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
 }
 
 async function handleAnalyzeWebsite(req: Request): Promise<Response> {
