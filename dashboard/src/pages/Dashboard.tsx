@@ -1,6 +1,6 @@
 import React from "react";
 import { supabase } from "../lib/supabase";
-import { getConfig, type ConfigData } from "../lib/api";
+import { getConfig, type ConfigData, type TenantSummary } from "../lib/api";
 import Overview from "./Overview";
 import ChatbotPage from "./Chatbot";
 import KnowledgePage from "./Knowledge";
@@ -19,13 +19,21 @@ const NAV: Array<{ id: Page; label: string }> = [
   { id: "settings", label: "Settings" },
 ];
 
-export default function DashboardShell() {
+interface DashboardShellProps {
+  tenants: TenantSummary[];
+  selectedTenantId: string | null;
+  onTenantSelect: (id: string | null) => void;
+}
+
+export default function DashboardShell({ tenants, selectedTenantId, onTenantSelect }: DashboardShellProps) {
   const [page, setPage] = React.useState<Page>("overview");
   const [config, setConfig] = React.useState<ConfigData | null>(null);
+  const [showTenantMenu, setShowTenantMenu] = React.useState(false);
 
   React.useEffect(() => {
-    getConfig().then(setConfig).catch(() => setConfig(null));
-  }, []);
+    // Reload config when tenant changes
+    getConfig(selectedTenantId || undefined).then(setConfig).catch(() => setConfig(null));
+  }, [selectedTenantId]);
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -39,6 +47,37 @@ export default function DashboardShell() {
         <div className="brand">
           <span className="logo">◈</span> Assistant HQ
         </div>
+
+        {/* Tenant Switcher */}
+        <div className="tenant-switcher" style={{ position: 'relative', marginBottom: 12 }}>
+          <button
+            className="btn ghost tenant-switch-btn"
+            onClick={() => setShowTenantMenu(!showTenantMenu)}
+            title="Switch tenant"
+          >
+            <span className="tenant-icon">◈</span>
+            <span className="tenant-name">{tenant?.name || 'Select Tenant'}</span>
+            <span className={`chevron ${showTenantMenu ? 'open' : ''}`}>▼</span>
+          </button>
+          {showTenantMenu && (
+            <div className="tenant-dropdown">
+              {tenants.map((t) => (
+                <button
+                  key={t.id}
+                  className={`tenant-option ${selectedTenantId === t.id ? 'active' : ''}`}
+                  onClick={() => {
+                    onTenantSelect(t.id);
+                    setShowTenantMenu(false);
+                  }}
+                >
+                  <span>{t.name}</span>
+                  <span className="muted" style={{ fontSize: 11 }}>{t.slug}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="nav-label">Manage</div>
         {NAV.map((n) => (
           <button

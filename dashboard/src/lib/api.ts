@@ -38,6 +38,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 // --- types -----------------------------------------------------------------
 
+export interface TenantSummary {
+  id: string;
+  slug: string;
+  name: string;
+  created_at: string;
+}
+
 export interface OnboardingKnowledge {
   title: string;
   content: string;
@@ -186,8 +193,9 @@ export function getOverview(): Promise<OverviewData> {
   return request<OverviewData>("/dashboard?action=overview");
 }
 
-export function getConfig(): Promise<ConfigData> {
-  return request<ConfigData>("/dashboard?action=config");
+export function getConfig(tenantId?: string): Promise<ConfigData> {
+  const params = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}&action=config` : "?action=config";
+  return request<ConfigData>(`/dashboard${params}`);
 }
 
 export function updateConfig(
@@ -198,7 +206,18 @@ export function updateConfig(
     body: JSON.stringify(patch),
   });
 }
+// --- multi-tenant ----------------------------------------------------------
 
+export function listTenants(): Promise<{ tenants: TenantSummary[] }> {
+  return request<{ tenants: TenantSummary[] }>("/dashboard?action=tenants");
+}
+
+export function createTenant(name: string): Promise<{ ok: boolean; tenantId: string; slug: string }> {
+  return request<{ ok: boolean; tenantId: string; slug: string }>('/dashboard?action=tenants', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
 export function listKnowledge(): Promise<{ items: KnowledgeItem[] }> {
   return request<{ items: KnowledgeItem[] }>("/dashboard?action=knowledge");
 }

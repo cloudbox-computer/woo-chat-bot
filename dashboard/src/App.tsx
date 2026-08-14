@@ -1,7 +1,7 @@
 import React from "react";
 import { Routes } from "react-router-dom";
 import { supabase } from "./lib/supabase";
-import { getConfig, ApiError } from "./lib/api";
+import { getConfig, ApiError, type TenantSummary, listTenants } from './lib/api';
 import AuthPage from "./pages/Auth";
 import Onboarding from "./pages/Onboarding";
 import DashboardShell from "./pages/Dashboard";
@@ -14,8 +14,33 @@ type SessionState =
   | { status: "onboarding" }
   | { status: "dashboard" };
 
+/** Store selected tenant ID in localStorage for persistence across reloads */
+const SELECTED_TENANT_KEY = 'zochat_selected_tenant';
+
+function getSelectedTenantId(): string | null {
+  try {
+    return localStorage.getItem(SELECTED_TENANT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveSelectedTenantId(tenantId: string | null) {
+  try {
+    if (tenantId) {
+      localStorage.setItem(SELECTED_TENANT_KEY, tenantId);
+    } else {
+      localStorage.removeItem(SELECTED_TENANT_KEY);
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export default function App() {
   const [state, setState] = React.useState<SessionState>({ status: "loading" });
+  const [tenants, setTenants] = React.useState<TenantSummary[]>([]);
+  const [selectedTenantId, setSelectedTenantId] = React.useState<string | null>(getSelectedTenantId());
 
   React.useEffect(() => {
     let alive = true;
@@ -38,7 +63,26 @@ export default function App() {
       if (resolved) return; // already know — don't bounce the UI
       setState({ status: "checking-tenant" });
       try {
-        await getConfig();
+        // Load all tenants for this user
+        const tenantsRes = await listTenants();
+        if (!alive) return;
+        setTenants(tenantsRes.tenants);
+
+        // If no tenant selected yet, pick the first one
+        let currentTenantId = selectedTenantId;
+        if (tenantsRes.tenants.length > 0 && !currentTenantId) {
+          currentTenantId = tenantsRes.tenants[0].id;
+          setSelectedTenantId(currentTenantId);
+          saveSelectedTenantId(currentTenantId);
+        } else if (currentTenantId) {
+          saveSelectedTenantId(currentTenantId);
+        }
+
+        // Try to load config for the selected tenant
+        if (currentTenantId) {
+          await getConfig(currentTenantId);
+        }
+
         if (alive) {
           resolved = true;
           setState({ status: "dashboard" });
@@ -98,7 +142,7 @@ export default function App() {
 
   return (
     <>
-      <DashboardShell />
+      <DashboardShell tenants={tenants} selectedTenantId={selectedTenantId} onTenantSelect={setSelectedTenantId} />
       <ToastHost />
     </>
   );

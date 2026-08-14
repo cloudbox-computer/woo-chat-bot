@@ -15,9 +15,9 @@
 //   PUT  /dashboard?action=integrations    upsert WooCommerce creds
 //   GET  /dashboard?action=tickets         list tickets
 //   PUT  /dashboard?action=tickets&id=..   update ticket status/priority
-import { DashboardError, embedScriptFor, resolveDashboardContext } from "../_shared/dashboard.ts";
+import { DashboardError, embedScriptFor, resolveDashboardContext, API, authUserFromRequest } from "../_shared/dashboard.ts";
 import { handleOptions, json } from "../_shared/cors.ts";
-import { supabaseConfig } from "../_shared/env.ts";
+import { supabaseConfig, env } from "../_shared/env.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
@@ -65,6 +65,84 @@ function fallbackPublicId(b: Record<string, unknown>): string {
   // public_id is backfilled by the schema migration so this is defensive.
   const id = String(b.id ?? "x").replace(/[^a-zA-Z0-9]/g, "_");
   return `cb_${id}`.slice(0, 32);
+}
+
+// ---------------------------------------------------------------------------
+// list_tenants — return all tenants the user is a member of
+// ---------------------------------------------------------------------------
+async function actionListTenants(req: Request) {
+  const user = authUserFromRequest(req);
+  if (!user) throw new DashboardError("Not authenticated", 401);
+  const key = env("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+  const memberships = await fetch(`${API}/tenant_members?user_id=eq.${user.id}&select=tenant_id,role`, {
+    headers: { Authorization: `Bearer ${key}`, apikey: key },
+  });
+  if (!memberships.ok) throw new DashboardError("Failed to load memberships", 502);
+  const rows = (await memberships.json()) as Array<{ tenant_id: string; role: string }>;
+  if (!rows.length) return json({ tenants: [] });
+
+  const tenantIds = rows.map((r) => r.tenant_id);
+  const res = await fetch(`${API}/tenants?id=in.(${tenantIds.join(",")})&select=id,slug,name,created_at`, {
+    headers: { Authorization: `Bearer ${key}`, apikey: key },
+  });
+  if (!res.ok) throw new DashboardError("Failed to load tenants", 502);
+  const data = (await res.json()) as Record<string, unknown>[];
+  const tenants = data.map((t) => ({
+    id: String(t.id),
+    slug: String(t.slug),
+    name: String(t.name),
+    created_at: String(t.created_at ?? ""),
+  }));
+  return json({ tenants });
+}
+
+// ---------------------------------------------------------------------------
+// create_tenant — create a new tenant and auto-add the caller as owner
+// ---------------------------------------------------------------------------
+async function actionCreateTenant(req: Request) {
+  const user = authUserFromRequest(req);
+  if (!user) throw new DashboardError("Not authenticated", 401);
+  const { url, serviceRoleKey } = supabaseConfig();
+  const base = `${url}/rest/v1`;
+  const headers: Record<string, string> = {
+    apikey: serviceRoleKey,
+    Authorization: `Bearer ${serviceRoleKey}`,
+    "Content-Type": "application/json",
+  };
+
+  const body = (await req.json().catch(() => ({}))) as { name: string };
+  const name = (body.name ?? "").trim();
+  if (!name) throw new DashboardError("Tenant name is required", 400);
+
+  const tenantId = crypto.randomUUID();
+  const slug = slugify(name);
+
+  // Check slug uniqueness (append suffix if needed)
+  let finalSlug = slug;
+  let suffix = 2;
+  while (true) {
+    const check = await fetch(`${base}/tenants?slug=eq.${finalSlug}&select=id`, { headers });
+    const checkData = await check.json() as Record<string, unknown>[];
+    if (!checkData.length) break;
+    finalSlug = `${slug}-${suffix}`;
+    suffix++;
+  }
+
+  await fetch(`${base}/tenants`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ id: tenantId, slug: finalSlug, name, currency: "GBP", onboarding_complete: false }),
+  });
+
+  // Auto-add creator as owner
+  await fetch(`${base}/tenant_members`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ tenant_id: tenantId, user_id: user.id, role: "owner" }),
+  });
+
+  return json({ ok: true, tenantId, slug: finalSlug });
 }
 
 // ---------------------------------------------------------------------------
@@ -452,11 +530,23 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleOptions();
   try {
     // Everything requires a valid user JWT; resolve the tenant membership.
-    const ctx = await resolveDashboardContext(req);
     const url = new URL(req.url);
     const action = url.searchParams.get("action") ?? "";
     const method = req.method;
 
+    // Tenant listing/creation doesn't require an existing tenant membership
+    if (action === "tenants") {
+      if (method === "GET") return await actionListTenants(req);
+      if (method === "POST") return await actionCreateTenant(req);
+    }
+
+    // All other actions require an active tenant
+    const ctx = await resolveDashboardContext(req, url.searchParams.get("tenantId") ?? undefined);
+
+    if (action === "tenants") {
+      if (method === "GET") return await actionListTenants(req);
+      if (method === "POST") return await actionCreateTenant(req);
+    }
     if (action === "overview") return await actionOverview(ctx);
     if (action === "config") {
       if (method === "GET") return await actionGetConfig(ctx);

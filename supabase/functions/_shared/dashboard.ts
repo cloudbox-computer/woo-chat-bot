@@ -92,7 +92,7 @@ export class DashboardError extends Error {
   }
 }
 
-const API = "https://xsegdfcqqktxoqlbazpl.supabase.co/rest/v1";
+export const API = "https://xsegdfcqqktxoqlbazpl.supabase.co/rest/v1";
 
 /**
  * Resolve the authenticated user's tenant by looking up tenant_members with

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chatbot Widget — Live Test</title>
+    <style>
+      body { font-family: Georgia, serif; max-width: 720px; margin: 60px auto; padding: 0 24px; color: #2a2a2a; background: #faf8f5; }
+      h1 { font-weight: 500; font-size: 28px; }
+      .card { background: #fff; border: 1px solid #e6dfd2; border-radius: 12px; padding: 20px; margin: 18px 0; }
+      .hint { margin-top: 30px; padding: 12px 16px; background: #fff8e1; border-left: 4px solid #ffc107; border-radius: 4px; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <h1>Widget Test — White Brand Color</h1>
+    <p>This tests that the widget handles white brand colors correctly.</p>
+    <div class="card">✨ Test Product — £99.00</div>
+    <div class="hint">
+      <strong>Note:</strong> Open the chat widget (bottom-right) and check that the header text, send button, and launcher icon are all readable against the white background. The text should be <strong>black</strong>, not white.
+    </div>
+    <div id="root"></div>
+    
+    <!-- 
+      Test with WHITE brand color (#ffffff)
+      This should produce BLACK text for readability
+    -->
+    <script src="https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/widget.js"></script>
+    <script>
+      // Mock config with white brand color
+      window.__widgetTestConfig = {
+        chatbotId: "test-white-brand",
+        apiUrl: "https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1",
+        brandColour: "#ffffff",  // WHITE background
+        title: "Chat with us",
+        subtitle: "Hi! How can I help you today?"
+      };
+    </script>
+  </body>
+</html>

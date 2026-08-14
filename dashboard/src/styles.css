@@ -177,6 +177,69 @@ button {
   font-size: 12px;
 }
 
+/* Tenant switcher */
+.sidebar .tenant-switcher {
+  margin-bottom: 12px;
+}
+
+.sidebar .tenant-switch-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  text-align: left;
+}
+
+.sidebar .tenant-switch-btn .chevron {
+  margin-left: auto;
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.sidebar .tenant-switch-btn .chevron.open {
+  transform: rotate(180deg);
+}
+
+.sidebar .tenant-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-top: 4px;
+  z-index: 100;
+  overflow: hidden;
+}
+
+.sidebar .tenant-option {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.sidebar .tenant-option:hover {
+  background: var(--panel-2);
+}
+
+.sidebar .tenant-option.active {
+  background: rgba(124, 58, 237, 0.15);
+  color: var(--accent-2);
+}
+
 .signout {
   margin-top: 10px;
   width: 100%;
