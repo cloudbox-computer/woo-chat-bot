@@ -240,6 +240,47 @@ button {
   color: var(--accent-2);
 }
 
+.sidebar .create-tenant-btn {
+  font-size: 12px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.modal .input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.modal .input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .signout {
   margin-top: 10px;
   width: 100%;
