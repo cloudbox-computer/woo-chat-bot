@@ -57,7 +57,7 @@ export interface WooClient {
   getCategories(): Promise<WooCategory[]>;
   trackOrder(opts: { orderId?: string; email?: string }): Promise<Order[]>;
   listAll(): Promise<Product[]>;
-  buildCheckoutUrl(items: CartItem[]): string;
+  buildCheckoutUrl(items: CartItem[], email?: string): string;
   cancelOrder(opts: { orderId: string; email?: string }): Promise<Order | null>;
   modifyOrder(opts: { orderId: string; email?: string; patch: OrderPatch }): Promise<Order | null>;
   refundOrder(opts: { orderId: string; email?: string; reason?: string }): Promise<Order | null>;
@@ -314,11 +314,15 @@ export class WooCommerceClient implements WooClient {
     return rows.map((w) => wooToProduct(w));
   }
 
-  buildCheckoutUrl(items: CartItem[]): string {
+  buildCheckoutUrl(items: CartItem[], email?: string): string {
     // Standard WooCommerce cart flow: send the customer to the cart page so
     // they confirm quantities before Stripe checkout. Card details are never
     // handled by the AI.
-    return `${this.storeUrl}/cart/`;
+    // Include customer email if provided for pre-fill.
+    const params = new URLSearchParams();
+    if (email) params.set("email", email);
+    const qs = params.toString();
+    return `${this.storeUrl}/cart/${qs ? "?" + qs : ""}`;
   }
 }
 
@@ -504,8 +508,11 @@ export class MockWooClient implements WooClient {
     return structuredClone(this.products);
   }
 
-  buildCheckoutUrl(items: CartItem[]): string {
-    return "https://ivyandpearls.co.uk/checkout/";
+  buildCheckoutUrl(items: CartItem[], email?: string): string {
+    const params = new URLSearchParams();
+    if (email) params.set("email", email);
+    const qs = params.toString();
+    return `https://ivyandpearls.co.uk/checkout/${qs ? "?" + qs : ""}`;
   }
 }
 

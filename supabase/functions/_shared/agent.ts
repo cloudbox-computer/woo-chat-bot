@@ -232,7 +232,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
         break;
       }
 
-      const ctx = { tenant, chatbotId, conversationId, db, allowed };
+      const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail };
       for (const call of result.toolCalls) {
         const toolResult = await executeTool(call.name, call.arguments, ctx);
         transcript.push({
@@ -275,7 +275,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
       if (forced) {
         deterministicRouted = true;
         toolTurns++;
-        const ctx = { tenant, chatbotId, conversationId, db, allowed };
+        const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail };
         const toolResult = await executeTool(forced.name, forced.arguments, ctx);
         transcript.push({
           role: "assistant",

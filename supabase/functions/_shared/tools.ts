@@ -11,6 +11,8 @@ export interface ToolContext {
   conversationId: string;
   db: Db;
   allowed?: Set<string>;
+  /** Customer email for account-gated operations (cart, orders). */
+  customerEmail?: string;
 }
 
 export type ToolResult = {
@@ -394,6 +396,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       return await searchTenantWebsite(ctx.tenant, { query: asStr(args.query), path: asStr(args.path) });
     }
     case "add_to_cart": {
+      // Require email for cart operations - cart is per-customer, not anonymous
+      if (!ctx.customerEmail) {
+        return { ok: false, text: "I need your email address to add items to your cart. Could you please share it?" };
+      }
       const productId = args.productId as string | number;
       const qty = Math.max(1, Math.floor(asNum(args.quantity) ?? 1));
       const p = await woo.getProduct(productId);
@@ -444,9 +450,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       return { ok: true, text: summarizeCart(cart, ctx.tenant.currency), products: cartToProducts(cart) };
     }
     case "create_checkout": {
+      // Require email for checkout - WooCommerce needs customer email
+      if (!ctx.customerEmail) {
+        return { ok: false, text: "I need your email address to proceed with checkout. Could you please share it?" };
+      }
       const cart = await ctx.db.getCart(ctx.conversationId);
       if (!cart.length) return { ok: false, text: "Your cart is empty — nothing to check out yet." };
-      const url = woo.buildCheckoutUrl(cart);
+      const url = woo.buildCheckoutUrl(cart, ctx.customerEmail);
       return { ok: true, text: `You have ${cart.length} item${cart.length === 1 ? "" : "s"} ready to check out. Complete your order here: ${url}`, products: cartToProducts(cart) };
     }
     case "cancel_order": {
