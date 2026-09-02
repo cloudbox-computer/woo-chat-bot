@@ -1,0 +1,44 @@
+project_id = "chatbot-system"
+
+[functions.chat]
+verify_jwt = false
+
+[functions.products]
+verify_jwt = false
+
+[functions.orders]
+verify_jwt = false
+
+[functions.knowledge]
+verify_jwt = false
+
+[functions.feedback]
+verify_jwt = false
+
+[functions.widget]
+verify_jwt = false
+
+[functions.widget-config]
+verify_jwt = false
+
+[functions.onboarding]
+verify_jwt = true
+
+[functions.onboarding_analyze]
+verify_jwt = true
+
+[functions.dashboard]
+verify_jwt = true
+
+[functions.conversation-sync]
+verify_jwt = false
+
+[functions.woocommerce-webhook]
+verify_jwt = false
+
+# Scheduled internal functions authenticate with X-Worker-Secret.
+[functions.worker]
+verify_jwt = false
+
+[functions.maintenance]
+verify_jwt = false

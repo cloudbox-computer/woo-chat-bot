@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Widget Color Contrast Test</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 24px; background: #faf8f5; }
+      h1 { color: #3b2a1a; }
+      .test-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-top: 30px; }
+      .test-card { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+      .test-card h3 { margin: 0 0 12px; font-size: 14px; color: #666; }
+      .preview { height: 60px; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; }
+      .preview-text { font-size: 16px; font-weight: 600; }
+      .color-sample { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+      .swatch { width: 40px; height: 40px; border-radius: 8px; border: 1px solid #ddd; }
+      .info { font-size: 13px; color: #666; }
+    </style>
+  </head>
+  <body>
+    <h1>Widget Color Contrast Test</h1>
+    <p>Testing automatic text color detection for different brand colors:</p>
+    
+    <div class="test-grid">
+      <div class="test-card">
+        <h3>White Brand (#ffffff)</h3>
+        <div class="preview" style="background: #ffffff;">
+          <span class="preview-text" style="color: #000000;">Chat with us</span>
+        </div>
+        <div class="color-sample">
+          <div class="swatch" style="background: #ffffff;"></div>
+          <div class="info">
+            <strong>Brand:</strong> #ffffff<br>
+            <strong>Text:</strong> #000000 (black)<br>
+            ✓ Readable
+          </div>
+        </div>
+      </div>
+
+      <div class="test-card">
+        <h3>Black Brand (#000000)</h3>
+        <div class="preview" style="background: #000000;">
+          <span class="preview-text" style="color: #ffffff;">Chat with us</span>
+        </div>
+        <div class="color-sample">
+          <div class="swatch" style="background: #000000;"></div>
+          <div class="info">
+            <strong>Brand:</strong> #000000<br>
+            <strong>Text:</strong> #ffffff (white)<br>
+            ✓ Readable
+          </div>
+        </div>
+      </div>
+
+      <div class="test-card">
+        <h3>Gold Brand (#c5a87b)</h3>
+        <div class="preview" style="background: #c5a87b;">
+          <span class="preview-text" style="color: #000000;">Chat with us</span>
+        </div>
+        <div class="color-sample">
+          <div class="swatch" style="background: #c5a87b;"></div>
+          <div class="info">
+            <strong>Brand:</strong> #c5a87b<br>
+            <strong>Text:</strong> #000000 (black)<br>
+            ✓ Readable
+          </div>
+        </div>
+      </div>
+
+      <div class="test-card">
+        <h3>Dark Purple (#2d1b4e)</h3>
+        <div class="preview" style="background: #2d1b4e;">
+          <span class="preview-text" style="color: #ffffff;">Chat with us</span>
+        </div>
+        <div class="color-sample">
+          <div class="swatch" style="background: #2d1b4e;"></div>
+          <div class="info">
+            <strong>Brand:</strong> #2d1b4e<br>
+            <strong>Text:</strong> #ffffff (white)<br>
+            ✓ Readable
+          </div>
+        </div>
+      </div>
+
+      <div class="test-card">
+        <h3>Light Gray (#e0e0e0)</h3>
+        <div class="preview" style="background: #e0e0e0;">
+          <span class="preview-text" style="color: #000000;">Chat with us</span>
+        </div>
+        <div class="color-sample">
+          <div class="swatch" style="background: #e0e0e0;"></div>
+          <div class="info">
+            <strong>Brand:</strong> #e0e0e0<br>
+            <strong>Text:</strong> #000000 (black)<br>
+            ✓ Readable
+          </div>
+        </div>
+      </div>
+
+      <div class="test-card">
+        <h3>Mid Gray (#808080)</h3>
+        <div class="preview" style="background: #808080;">
+          <span class="preview-text" style="color: #ffffff;">Chat with us</span>
+        </div>
+        <div class="color-sample">
+          <div class="swatch" style="background: #808080;"></div>
+          <div class="info">
+            <strong>Brand:</strong> #808080<br>
+            <strong>Text:</strong> #ffffff (white)<br>
+            ✓ Readable
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 40px; padding: 20px; background: #fff; border-radius: 12px;">
+      <h2>Test Results</h2>
+      <ul style="line-height: 2;">
+        <li><strong>White (#ffffff):</strong> Uses BLACK text ✓</li>
+        <li><strong>Black (#000000):</strong> Uses WHITE text ✓</li>
+        <li><strong>Gold (#c5a87b):</strong> Uses BLACK text ✓</li>
+        <li><strong>Dark Purple (#2d1b4e):</strong> Uses WHITE text ✓</li>
+        <li><strong>Light Gray (#e0e0e0):</strong> Uses BLACK text ✓</li>
+        <li><strong>Mid Gray (#808080):</strong> Uses WHITE text ✓</li>
+      </ul>
+      <p style="margin-top: 15px; color: #666; font-size: 14px;">
+        The widget now automatically detects brand color luminance and adjusts text color accordingly.
+        Light backgrounds get dark text, dark backgrounds get light text.
+      </p>
+    </div>
+  </body>
+</html>

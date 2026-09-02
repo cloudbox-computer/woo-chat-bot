@@ -1,0 +1,9 @@
+.zochat-reset {
+  all: initial;
+  box-sizing: border-box;
+}
+.zochat-reset *,
+.zochat-reset *::before,
+.zochat-reset *::after {
+  box-sizing: border-box;
+}

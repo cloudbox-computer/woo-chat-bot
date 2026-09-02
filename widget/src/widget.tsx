@@ -1,0 +1,597 @@
+import { useEffect, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { Markdown } from "./Markdown";
+
+export interface WidgetConfig {
+  chatbotId: string;
+  apiUrl: string;
+  brandColour?: string;
+  title?: string;
+  /** Shown under the title in the widget header bar. */
+  assistantHeaderMessage?: string;
+  /** First chat bubble shown when the conversation is empty (welcome message). */
+  subtitle?: string;
+  quickActions?: string[];
+  customerEmail?: string;
+  /** GDPR: privacy-policy URL shown in the widget footer + consent line. */
+  privacyUrl?: string;
+}
+
+interface ChatApiRequest {
+  chatbotId: string;
+  message: string;
+  conversationId?: string;
+  conversationToken?: string;
+  customerEmail?: string;
+  emailConsent?: boolean;
+}
+
+interface ChatApiResponse {
+  reply: string;
+  conversationId: string;
+  conversationToken?: string;
+  products?: Product[];
+  requiresEmail?: boolean;
+}
+
+export interface Product {
+  id: string | number;
+  name: string;
+  price: number;
+  currency?: string;
+  url?: string;
+  imageUrl?: string;
+  inStock?: boolean;
+  description?: string;
+}
+
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  products?: Product[];
+  error?: boolean;
+}
+
+const COLORS = {
+  primary: "#9c7b4f",
+  bg: "#ffffff",
+  fg: "#1f1a14",
+  muted: "#7a7268",
+  border: "#e8e1d4",
+  userBubble: "#9c7b4f",
+  userText: "#ffffff",
+  assistantBubble: "#f5f0e6",
+  danger: "#c0392b",
+};
+
+/** Widget storage key for persisting customer email across page reloads */
+const WIDGET_EMAIL_KEY = "zochat_customer_email";
+const WIDGET_SESSION_PREFIX = "zochat_session_";
+
+/**
+ * Returns the appropriate text color (#000 or #fff) for readability on top
+ * of the given brand color. White or light colors get dark text; dark colors
+ * get white text.
+ */
+function getTextColorForBrand(hex: string): string {
+  const clean = hex.replace("#", "");
+  let r: number, g: number, b: number;
+  if (clean.length === 3) {
+    r = parseInt(clean[0] + clean[0], 16);
+    g = parseInt(clean[1] + clean[1], 16);
+    b = parseInt(clean[2] + clean[2], 16);
+  } else if (clean.length === 6) {
+    r = parseInt(clean.substring(0, 2), 16);
+    g = parseInt(clean.substring(2, 4), 16);
+    b = parseInt(clean.substring(4, 6), 16);
+  } else {
+    return "#ffffff";
+  }
+  // Relative luminance (WCAG formula)
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.5 ? "#000000" : "#ffffff";
+}
+
+// GDPR: used to surface the email-consent box when a customer shares an email.
+const EMAIL_RE = /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i;
+
+function sym(currency?: string): string {
+  if (currency === "GBP") return "£";
+  if (currency === "USD") return "$";
+  if (currency === "EUR") return "€";
+  return currency ? `${currency} ` : "£";
+}
+
+/**
+ * True when the assistant's text reply is itself the catalogue listing
+ * (it names most of the returned products). In that case the product cards
+ * below already show name + price, so we hide the redundant text and render
+ * the cards only.
+ */
+function isProductListing(content: string, products?: Product[]): boolean {
+  if (!products?.length || !content) return false;
+  const lower = content.toLowerCase();
+  let matched = 0;
+  for (const p of products) {
+    if (p.name && lower.includes(p.name.toLowerCase())) matched++;
+  }
+  return matched >= 2 && matched >= Math.ceil(products.length / 2);
+}
+
+export function mountWidget(el: HTMLElement, config: WidgetConfig) {
+  createRoot(el).render(<Widget config={config} />);
+}
+
+export function Widget({ config }: { config: WidgetConfig }) {
+  const sessionKey = `${WIDGET_SESSION_PREFIX}${config.chatbotId}`;
+  const initialSession = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(sessionKey) || "{}") as {
+        conversationId?: string;
+        conversationToken?: string;
+        messages?: Message[];
+        lastSyncAt?: string;
+      };
+    } catch {
+      return {};
+    }
+  })();
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [messages, setMessages] = useState<Message[]>(initialSession.messages ?? []);
+  const [conversationId, setConversationId] = useState<string | undefined>(initialSession.conversationId);
+  const [conversationToken, setConversationToken] = useState<string | undefined>(initialSession.conversationToken);
+  const seenAgentMessages = useRef<Set<string>>(new Set());
+  const lastSyncAt = useRef<string>(initialSession.lastSyncAt ?? new Date(0).toISOString());
+  const [sentFeedback, setSentFeedback] = useState<Set<string>>(new Set());
+  // GDPR: consent box appears once the customer shares an email; when checked,
+  // their explicit consent is sent to /chat and stored on the conversation.
+  const [emailConsent, setEmailConsent] = useState(false);
+  const [askConsent, setAskConsent] = useState(false);
+  // Email prompt for cart/checkout when user hasn't provided email yet
+  const [showEmailPrompt, setShowEmailPrompt] = useState(false);
+  const [pendingEmailAction, setPendingEmailAction] = useState<string | null>(null);
+  const [emailInput, setEmailInput] = useState("");
+
+  // Load persisted customer email from localStorage on mount
+  const [storedEmail, setStoredEmail] = useState<string>(() => {
+    try {
+      return localStorage.getItem(WIDGET_EMAIL_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
+
+  // Use stored email as the effective customerEmail
+  const effectiveEmail = config.customerEmail || storedEmail;
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const brand = config.brandColour ?? COLORS.primary;
+  const brandTextColor = getTextColorForBrand(brand);
+  const title = config.title ?? "Chat with us";
+  const quickActions = config.quickActions?.length
+    ? config.quickActions
+    : ["Track my order", "Delivery times", "Returns", "Sizing help", "Product materials", "Gift ideas"];
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, loading, open]);
+
+  useEffect(() => {
+    if (!conversationId || !conversationToken) return;
+    try { localStorage.setItem(sessionKey, JSON.stringify({ conversationId, conversationToken, messages: messages.slice(-100), lastSyncAt: lastSyncAt.current })); } catch { /* ignore */ }
+  }, [conversationId, conversationToken, sessionKey, messages]);
+
+  useEffect(() => {
+    if (!conversationId || !conversationToken) return;
+    let stopped = false;
+    const sync = async () => {
+      try {
+        const res = await fetch(`${config.apiUrl.replace(/\/+$/, "")}/conversation-sync`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chatbotId: config.chatbotId, conversationId, conversationToken, since: lastSyncAt.current }),
+        });
+        if (!res.ok || stopped) return;
+        const data = await res.json() as { mode?: string; messages?: Array<{id:string;content:string;created_at:string}> };
+        const fresh = (data.messages ?? []).filter((m) => !seenAgentMessages.current.has(m.id));
+        if (fresh.length) {
+          for (const m of fresh) seenAgentMessages.current.add(m.id);
+          setMessages((old) => [...old, ...fresh.map((m) => ({ role: "assistant" as const, content: m.content }))]);
+          lastSyncAt.current = fresh[fresh.length - 1].created_at;
+        }
+      } catch { /* transient sync failures are non-fatal */ }
+    };
+    void sync();
+    const timer = window.setInterval(sync, 3000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [conversationId, conversationToken, config.apiUrl, config.chatbotId]);
+
+  async function send(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || loading) return;
+    // GDPR: if the customer is sharing an email, surface the consent box once.
+    if (EMAIL_RE.test(trimmed) && !askConsent) setAskConsent(true);
+    // Auto-persist email if user mentions it in chat
+    const emailMatch = trimmed.match(EMAIL_RE);
+    if (emailMatch && !effectiveEmail) {
+      try {
+        localStorage.setItem(WIDGET_EMAIL_KEY, emailMatch[0]);
+        setStoredEmail(emailMatch[0]);
+      } catch {
+        // ignore storage failures
+      }
+    }
+    setInput("");
+    setMessages((m) => [...m, { role: "user", content: trimmed }]);
+    setLoading(true);
+    try {
+      const res = await fetch(`${config.apiUrl.replace(/\/+$/, "")}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatbotId: config.chatbotId,
+          message: trimmed,
+          conversationId,
+          conversationToken,
+          customerEmail: effectiveEmail,
+          emailConsent: emailConsent || undefined,
+        } satisfies ChatApiRequest),
+      });
+      if (!res.ok) throw new Error(`chat failed: ${res.status}`);
+      const data = (await res.json()) as ChatApiResponse;
+      setConversationId(data.conversationId);
+      setConversationToken(data.conversationToken);
+      // Debug guard: server should return a normal assistant reply. If we
+      // unexpectedly receive a tool marker or an empty reply, log it and
+      // show a friendly fallback so users don't see raw tool strings.
+      let assistantContent = data.reply ?? "";
+      if (!assistantContent || assistantContent.startsWith("tool:")) {
+        console.warn("Unexpected assistant reply from /chat:", data);
+        assistantContent = "Sorry — I couldn't form a reply from the assistant. Please try again.";
+      }
+      // If the backend requires an email for cart actions, show prompt
+      if (data.requiresEmail) {
+        setShowEmailPrompt(true);
+        setPendingEmailAction(trimmed);
+      }
+      setMessages((m) => [...m, { role: "assistant", content: assistantContent, products: data.products }]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "assistant", content: "Sorry — I couldn't reach the assistant right now. Please try again in a moment.", error: true }]);
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleAddToCart(product: Product) {
+    // Check if user has email configured or stored
+    if (!effectiveEmail) {
+      setPendingEmailAction(`Add ${product.name} (product ${product.id}) to my cart`);
+      setShowEmailPrompt(true);
+      return;
+    }
+    send(`Add ${product.name} (product ${product.id}) to my cart`);
+  }
+
+  function handleSubmitEmail(email: string) {
+    setShowEmailPrompt(false);
+    setEmailInput("");
+    // Persist email to localStorage for this conversation
+    try {
+      localStorage.setItem(WIDGET_EMAIL_KEY, email);
+    } catch {
+      // ignore storage failures
+    }
+    setStoredEmail(email);
+    if (pendingEmailAction) {
+      // Re-attempt the original action with the provided email
+      send(`${pendingEmailAction}. My email is ${email}`);
+    }
+  }
+
+  function handleCancelEmailPrompt() {
+    setShowEmailPrompt(false);
+    setEmailInput("");
+    setPendingEmailAction(null);
+  }
+
+  async function sendFeedback(rating: number) {
+    if (!conversationId || sentFeedback.has(conversationId)) return;
+    setSentFeedback((s) => new Set(s).add(conversationId));
+    try {
+      await fetch(`${config.apiUrl.replace(/\/+$/, "")}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatbotId: config.chatbotId, conversationId, conversationToken, rating }),
+      });
+    } catch {
+      // feedback is best-effort
+    }
+  }
+
+  const s: Record<string, React.CSSProperties> = {
+    root: { fontFamily: "Inter, system-ui, -apple-system, sans-serif", position: "fixed", bottom: 24, right: 24, zIndex: 2147483000, colorScheme: "light" },
+    launcher: { width: 50, height: 50, borderRadius: 25, background: brand, color: brandTextColor, border: "none", cursor: "pointer", boxShadow: "0 6px 20px rgba(0,0,0,0.22)", display: "flex", alignItems: "center", justifyContent: "center", transition: "transform .15s ease" },
+    panel: { position: "fixed", bottom: 86, right: 24, width: 380, maxWidth: "calc(100vw - 32px)", height: 520, maxHeight: "calc(100vh - 110px)", background: COLORS.bg, borderRadius: 16, boxShadow: "0 12px 48px rgba(0,0,0,0.25)", display: "flex", flexDirection: "column", overflow: "hidden", border: `1px solid ${COLORS.border}` },
+    header: { background: brand, color: brandTextColor, padding: "14px 16px", display: "flex", alignItems: "center", gap: 10 },
+    headerText: { flex: 1 },
+    title: { margin: 0, fontSize: 15, fontWeight: 600, letterSpacing: 0.2 },
+    subtitle: { margin: "2px 0 0", fontSize: 12, opacity: 0.9 },
+      close: { background: "transparent", border: "none", color: brandTextColor, cursor: "pointer", fontSize: 16, padding: 4 },
+    body: { flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10, background: "#faf8f4" },
+    bubble: { maxWidth: "82%", padding: "10px 13px", borderRadius: 14, fontSize: 14, lineHeight: 1.45, wordBreak: "break-word" },
+    user: { background: brand, color: brandTextColor, alignSelf: "flex-end", borderBottomRightRadius: 4, whiteSpace: "pre-wrap" },
+    assistant: { background: COLORS.assistantBubble, color: COLORS.fg, alignSelf: "flex-start", borderBottomLeftRadius: 4 },
+    error: { background: "#fdecea", color: COLORS.danger, whiteSpace: "pre-wrap" },
+    card: { background: "#fff", border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 10, display: "flex", gap: 10, maxWidth: "82%", alignSelf: "flex-start" },
+    cardImg: { width: 52, height: 52, borderRadius: 8, objectFit: "cover", background: "#f0ebe0", flexShrink: 0 },
+    cardName: { fontSize: 13, fontWeight: 600, color: COLORS.fg, margin: 0 },
+    cardPrice: { fontSize: 13, color: brand, fontWeight: 600, margin: "3px 0 0" },
+    cardActions: { display: "flex", gap: 8, marginTop: 6 },
+    cardBtn: { fontSize: 12, border: "none", borderRadius: 8, padding: "5px 10px", cursor: "pointer", background: brand, color: brandTextColor },
+    cardLink: { fontSize: 12, color: brand, textDecoration: "none", alignSelf: "center" },
+    chips: { display: "flex", flexWrap: "wrap", gap: 6, padding: "0 14px 10px", background: "#faf8f4" },
+    chip: { fontSize: 12, border: `1px solid ${COLORS.border}`, background: "#fff", color: COLORS.fg, borderRadius: 999, padding: "6px 11px", cursor: "pointer" },
+    inputRow: { display: "flex", gap: 8, padding: 10, borderTop: `1px solid ${COLORS.border}`, background: "#fff" },
+    input: { flex: 1, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "9px 12px", fontSize: 14, outline: "none" },
+    send: { background: brand, color: brandTextColor, border: "none", borderRadius: 10, padding: "0 16px", fontSize: 14, fontWeight: 600, cursor: "pointer" },
+    typing: { fontSize: 12, color: COLORS.muted, padding: "4px 2px" },
+    feedback: { fontSize: 11, color: COLORS.muted, padding: "2px 0 0", display: "flex", gap: 8, alignItems: "center" },
+    feedbackBtn: { background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: 0 },
+    dot: { display: "inline-block", width: 6, height: 6, marginRight: 4, borderRadius: 3, background: COLORS.muted, animation: "zochatPulse 1.2s infinite" },
+  };
+
+  return (
+    <div style={s.root}>
+      <style>{`
+        @keyframes zochatPulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }
+        .zochat-dot:nth-child(2) { animation-delay: .2s } .zochat-dot:nth-child(3) { animation-delay: .4s }
+        .zochat-md { font-size: 14px; line-height: 1.5; word-break: break-word; }
+        .zochat-md > :first-child { margin-top: 0; }
+        .zochat-md > :last-child { margin-bottom: 0; }
+        .zochat-md p { margin: 0 0 8px; }
+        .zochat-md h1, .zochat-md h2, .zochat-md h3, .zochat-md h4, .zochat-md h5, .zochat-md h6 { margin: 10px 0 6px; font-weight: 700; line-height: 1.3; }
+        .zochat-md h1 { font-size: 16px; } .zochat-md h2 { font-size: 15px; } .zochat-md h3 { font-size: 14px; }
+        .zochat-md ul, .zochat-md ol { margin: 0 0 8px; padding-left: 20px; }
+        .zochat-md li { margin: 2px 0; }
+        .zochat-md a { color: ${brand}; text-decoration: underline; }
+        .zochat-md strong { font-weight: 700; }
+        .zochat-md em { font-style: italic; }
+        .zochat-md del { color: ${COLORS.muted}; }
+        .zochat-md code { background: rgba(0,0,0,.06); border-radius: 4px; padding: 1px 4px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+        .zochat-md pre { background: #f0ebe0; border-radius: 8px; padding: 8px 10px; overflow-x: auto; margin: 0 0 8px; }
+        .zochat-md pre code { background: none; padding: 0; font-size: 12px; }
+        .zochat-md blockquote { border-left: 3px solid #d8cfc0; margin: 0 0 8px; padding: 2px 0 2px 10px; color: ${COLORS.muted}; }
+        .zochat-md table { border-collapse: collapse; width: 100%; margin: 0 0 8px; font-size: 13px; }
+        .zochat-md th, .zochat-md td { border: 1px solid #e8e1d4; padding: 5px 8px; text-align: left; }
+        .zochat-md th { background: #f5f0e6; font-weight: 700; }
+        .zochat-md tr:nth-child(even) td { background: #faf8f4; }
+        .zochat-md hr { border: none; border-top: 1px solid #e8e1d4; margin: 10px 0; }
+        .zochat-md input[type="checkbox"] { margin-right: 6px; }
+        .zochat-md img { max-width: 100%; border-radius: 8px; }
+      `}</style>
+      {open && (
+        <div style={s.panel}>
+          <div style={s.header}>
+            <div style={s.headerText}>
+              <p style={s.title}>{title}</p>
+              {config.assistantHeaderMessage ? <p style={s.subtitle}>{config.assistantHeaderMessage}</p> : null}
+            </div>
+            <button style={s.close} onClick={() => setOpen(false)} aria-label="Close chat">✕</button>
+          </div>
+          <div style={s.body} ref={scrollRef}>
+            {messages.length === 0 && !loading && (
+              <div style={{ ...s.bubble, ...s.assistant }}>
+                {config.subtitle ?? "Hi! How can I help you today?"}
+              </div>
+            )}
+            {(() => {
+              const nodes: React.ReactNode[] = [];
+              for (let i = 0; i < messages.length; i++) {
+                const m = messages[i];
+
+                // Detect assistant tool invocation markers of the form:
+                //   tool:NAME:JSON
+                if (m.role === "assistant" && typeof m.content === "string" && m.content.startsWith("tool:")) {
+                  const payload = m.content.slice("tool:".length);
+                  const colon = payload.indexOf(":");
+                  const toolName = colon === -1 ? payload : payload.slice(0, colon);
+                  let args: any = {};
+                  if (colon !== -1) {
+                    try {
+                      args = JSON.parse(payload.slice(colon + 1));
+                    } catch {
+                      args = {};
+                    }
+                  }
+
+                  // The next message is expected to be the tool output (role: user)
+                  const next = messages[i + 1];
+                  const toolOutput = next && next.role === "user" ? next.content : undefined;
+
+                  nodes.push(
+                    <div key={`tool-${i}`} style={s.card}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>{toolName}</div>
+                      <div style={{ marginTop: 8, color: COLORS.muted, fontSize: 13 }}>{JSON.stringify(args)}</div>
+                      <div style={{ marginTop: 10 }}>{toolOutput ?? "(no result)"}</div>
+                    </div>,
+                  );
+
+                  if (next && next.role === "user") i++; // skip the tool output message, we've shown it
+                  continue;
+                }
+
+                // Normal message. When the reply is itself the catalogue
+                // listing, the product cards below already show name + price,
+                // so we render the cards only (no duplicate text bubble).
+                const productListing = m.role === "assistant" && isProductListing(m.content, m.products);
+                nodes.push(
+                  <div key={i}>
+                    {m.role === "assistant" ? (
+                      !productListing && (
+                        <div style={{ ...s.bubble, ...(m.error ? s.error : s.assistant) }}>
+                          <Markdown>{m.content}</Markdown>
+                        </div>
+                      )
+                    ) : (
+                      <div style={{ ...s.bubble, ...s.user }}>{m.content}</div>
+                    )}
+                    {m.products?.map((p) => (
+                      <div key={String(p.id)} style={s.card}>
+                        {p.imageUrl ? <img src={p.imageUrl} alt={p.name} style={s.cardImg} /> : null}
+                        <div style={{ flex: 1 }}>
+                          <p style={s.cardName}>{p.name}</p>
+                          <p style={s.cardPrice}>{sym(p.currency)}{p.price.toFixed(2)}</p>
+                          <div style={s.cardActions}>
+                            <button
+                              style={s.cardBtn}
+                              onClick={() => handleAddToCart(p)}
+                            >
+                              Add to cart
+                            </button>
+                            {p.url ? <a style={s.cardLink} href={p.url} target="_blank" rel="noreferrer">View →</a> : null}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {m.role === "assistant" && conversationId && !m.error && (
+                      <div style={s.feedback}>
+                        Was this helpful?
+                        <button style={s.feedbackBtn} onClick={() => sendFeedback(1)} aria-label="Helpful">👍</button>
+                        <button style={s.feedbackBtn} onClick={() => sendFeedback(-1)} aria-label="Not helpful">👎</button>
+                      </div>
+                    )}
+                  </div>,
+                );
+              }
+              return nodes;
+            })()}
+            {loading && (
+              <div style={{ ...s.bubble, ...s.assistant, ...s.typing }}>
+                <span className="zochat-dot" style={s.dot} />
+                <span className="zochat-dot" style={s.dot} />
+                <span className="zochat-dot" style={s.dot} />
+              </div>
+            )}
+          </div>
+          {messages.length === 0 && (
+            <div style={s.chips}>
+              {quickActions.map((qa) => (
+                <button key={qa} style={s.chip} onClick={() => send(qa)}>{qa}</button>
+              ))}
+            </div>
+          )}
+          {askConsent && (
+            <label
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "flex-start",
+                padding: "8px 12px",
+                borderTop: `1px solid ${COLORS.border}`,
+                background: "#fff",
+                fontSize: 11,
+                color: COLORS.muted,
+                lineHeight: 1.45,
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={emailConsent}
+                onChange={(e) => setEmailConsent(e.target.checked)}
+                style={{ marginTop: 1 }}
+              />
+              <span>
+                I agree to {title} storing my email to help with this enquiry.
+                {config.privacyUrl ? (
+                  <>
+                    {" "}
+                    <a
+                      href={config.privacyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: brand, textDecoration: "underline" }}
+                    >
+                      Privacy policy
+                    </a>
+                  </>
+                ) : null}
+              </span>
+            </label>
+          )}
+          {showEmailPrompt && (
+            <div style={{ padding: "12px 16px", borderTop: `1px solid ${COLORS.border}`, background: "#fff" }}>
+              <p style={{ fontSize: 13, color: COLORS.fg, marginBottom: 8 }}>
+                To add items to cart, please provide your email address:
+              </p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  style={{ ...s.input, flex: 1 }}
+                  placeholder="your@email.com"
+                  value={emailInput}
+                  onChange={(e) => setEmailInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && emailInput.trim() && handleSubmitEmail(emailInput.trim())}
+                />
+                <button
+                  style={{ ...s.send, padding: "0 16px" }}
+                  onClick={() => emailInput.trim() && handleSubmitEmail(emailInput.trim())}
+                  disabled={!emailInput.trim()}
+                >
+                  Save
+                </button>
+                <button
+                  style={{ ...s.send, padding: "0 16px", background: COLORS.muted }}
+                  onClick={handleCancelEmailPrompt}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          <div style={s.inputRow}>
+            <input
+              style={s.input}
+              value={input}
+              placeholder="Ask about products, orders, delivery…"
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && send(input)}
+            />
+            <button style={s.send} onClick={() => send(input)} disabled={loading || !input.trim()}>Send</button>
+          </div>
+          {config.privacyUrl && (
+            <div
+              style={{
+                padding: "6px 12px",
+                borderTop: `1px solid ${COLORS.border}`,
+                background: "#fff",
+                fontSize: 10,
+                color: COLORS.muted,
+                lineHeight: 1.5,
+              }}
+            >
+              🔒 We only use your details to respond to your enquiry.{" "}
+              <a
+                href={config.privacyUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: brand, textDecoration: "underline" }}
+              >
+                Privacy policy
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+      <button style={s.launcher} onClick={() => setOpen((o) => !o)} aria-label="Open chat">
+        {open ? (
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        ) : (
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></svg>
+        )}
+      </button>
+    </div>
+  );
+}

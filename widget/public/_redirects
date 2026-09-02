@@ -1,0 +1,18 @@
+# Netlify proxy rewrites: keep the Supabase edge-function origin out of the
+# customer-facing snippet. The widget.js runs from this same host, and without
+# a data-api-url attribute it resolves its API base from the script's origin,
+# so these routes must be proxied (status 200) to the edge functions.
+#
+# The widget only calls these three endpoints directly from the browser:
+#   GET  /widget-config?chatbot=...
+#   POST /chat
+#   POST /feedback
+# (products/orders/knowledge are invoked server-side by the chat agent.)
+#
+# Status 200 = surgical proxy rewrite: method, body and query string are
+# forwarded; response headers (incl. Access-Control-Allow-Origin: *) pass
+# through from the edge functions.
+/widget-config  https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/widget-config  200
+/chat           https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/chat           200
+/feedback       https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/feedback       200
+/conversation-sync https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/conversation-sync 200
