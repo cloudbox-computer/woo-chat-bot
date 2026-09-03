@@ -77,42 +77,74 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
     this.rest = new SupabaseRest(tenant.supabaseUrl, tenant.supabaseAnonKey);
   }
 
+  private hasExplicitFieldMap(): boolean {
+    return !!this.map.fields && Object.keys(this.map.fields).length > 0;
+  }
+
   private selectFields(): string[] {
-    // When an explicit map is supplied, query only configured physical columns
-    // so optional columns that do not exist cannot break the entire catalogue.
-    if (this.map.fields && Object.keys(this.map.fields).length) {
-      const mapped = Object.values(this.map.fields).map(safeIdent).filter(Boolean) as string[];
-      for (const required of [field(this.map, "id", "id"), field(this.map, "name", "name"), field(this.map, "price", "price")]) {
-        if (safeIdent(required)) mapped.push(required);
-      }
-      return Array.from(new Set(mapped));
+    if (!this.hasExplicitFieldMap()) return ["*"];
+    const mapped = Object.values(this.map.fields ?? {}).map(safeIdent).filter(Boolean) as string[];
+    for (const required of [field(this.map, "id", "id"), field(this.map, "name", "name"), field(this.map, "price", "price")]) {
+      if (safeIdent(required)) mapped.push(required);
     }
-    return ["id", "name", "price", "currency", "description", "category", "url", "image_url", "in_stock", "stock_quantity"];
+    return Array.from(new Set(mapped));
+  }
+
+  private pick(row: Record<string, unknown>, logical: string, fallbacks: string[]): unknown {
+    const explicit = safeIdent(this.map.fields?.[logical]);
+    if (explicit && Object.prototype.hasOwnProperty.call(row, explicit)) return row[explicit];
+    for (const key of fallbacks) {
+      if (Object.prototype.hasOwnProperty.call(row, key) && row[key] !== null && row[key] !== undefined) return row[key];
+    }
+    return undefined;
   }
 
   private toProduct(row: Record<string, unknown>): Product {
-    const idCol = field(this.map, "id", "id");
-    const nameCol = field(this.map, "name", "name");
-    const priceCol = field(this.map, "price", "price");
-    const currencyCol = field(this.map, "currency", "currency");
-    const descriptionCol = field(this.map, "description", "description");
-    const categoryCol = field(this.map, "category", "category");
-    const urlCol = field(this.map, "url", "url");
-    const imageCol = field(this.map, "image_url", "image_url");
-    const stockCol = field(this.map, "in_stock", "in_stock");
-    const qtyCol = field(this.map, "stock_quantity", "stock_quantity");
+    const rawId = this.pick(row, "id", ["id", "product_id", "productId", "sku"]);
+    const rawName = this.pick(row, "name", ["name", "title", "product_name", "productName"]);
+    const rawPrice = this.pick(row, "price", ["price", "sale_price", "regular_price", "amount", "unit_price"]);
+    const rawCurrency = this.pick(row, "currency", ["currency", "currency_code"]);
+    const rawDescription = this.pick(row, "description", ["description", "short_description", "summary"]);
+    const rawCategory = this.pick(row, "category", ["category", "category_name", "type"]);
+    const rawUrl = this.pick(row, "url", ["url", "permalink", "product_url", "link"]);
+    const rawImage = this.pick(row, "image_url", ["image_url", "imageUrl", "image", "featured_image", "thumbnail", "thumbnail_url"]);
+    const rawStock = this.pick(row, "in_stock", ["in_stock", "available", "is_available", "active", "is_active", "stock_status"]);
+    const rawQty = this.pick(row, "stock_quantity", ["stock_quantity", "stock", "quantity", "inventory_quantity"]);
+
+    let inStock = bool(rawStock);
+    if (inStock === undefined && typeof rawStock === "string") {
+      const v = rawStock.trim().toLowerCase();
+      if (["instock", "in_stock", "available", "active"].includes(v)) inStock = true;
+      if (["outofstock", "out_of_stock", "unavailable", "inactive"].includes(v)) inStock = false;
+    }
+
     return {
-      id: (row[idCol] as string | number) ?? "",
-      name: str(row[nameCol]) ?? "Unnamed product",
-      price: num(row[priceCol]) ?? 0,
-      currency: str(row[currencyCol]) ?? this.tenant.currency,
-      description: str(row[descriptionCol]),
-      category: str(row[categoryCol]),
-      url: str(row[urlCol]),
-      imageUrl: str(row[imageCol]),
-      inStock: bool(row[stockCol]),
-      stockQuantity: num(row[qtyCol]),
+      id: (rawId as string | number) ?? "",
+      name: str(rawName) ?? "Unnamed product",
+      price: num(rawPrice) ?? 0,
+      currency: str(rawCurrency) ?? this.tenant.currency,
+      description: str(rawDescription),
+      category: str(rawCategory),
+      url: str(rawUrl),
+      imageUrl: str(rawImage),
+      inStock,
+      stockQuantity: num(rawQty),
     };
+  }
+
+  private matchesLocalFilters(product: Product, input: ProductSearchInput): boolean {
+    if (input.query) {
+      const q = input.query.trim().toLowerCase();
+      if (q) {
+        const hay = `${product.name} ${product.description ?? ""} ${product.category ?? ""}`.toLowerCase();
+        const words = q.split(/\s+/).filter(Boolean);
+        if (!words.every((w) => hay.includes(w))) return false;
+      }
+    }
+    if (input.minPrice !== undefined && product.price < input.minPrice) return false;
+    if (input.maxPrice !== undefined && product.price > input.maxPrice) return false;
+    if (input.category && !(product.category ?? "").toLowerCase().includes(input.category.toLowerCase())) return false;
+    return true;
   }
 
   async searchProducts(input: ProductSearchInput): Promise<Product[]> {
@@ -120,24 +152,39 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
     if (!table) throw new Error("Catalogue mapping is invalid");
     const p = new URLSearchParams();
     p.set("select", this.selectFields().join(","));
-    p.set("limit", String(Math.min(Math.max(1, this.map.maxRows ?? 50), 100)));
-    const nameCol = field(this.map, "name", "name");
-    const priceCol = field(this.map, "price", "price");
-    const categoryCol = field(this.map, "category", "category");
-    if (input.query) p.set(nameCol, `ilike.*${input.query.replace(/[%*,()]/g, "")}*`);
-    if (input.minPrice !== undefined) p.append(priceCol, `gte.${input.minPrice}`);
-    if (input.maxPrice !== undefined) p.append(priceCol, `lte.${input.maxPrice}`);
-    if (input.category) p.set(categoryCol, `ilike.${input.category.replace(/[%*,()]/g, "")}`);
-    for (const [logical, value] of Object.entries(input.attributes ?? {})) {
-      const col = safeIdent(this.map.fields?.[logical]);
-      if (col) p.set(col, `eq.${String(value).replace(/[,()]/g, "")}`);
+    p.set("limit", String(Math.min(Math.max(1, this.map.maxRows ?? 100), 250)));
+
+    // Only push filters into PostgREST when the tenant supplied an explicit
+    // field map. With the conventional `products` table we deliberately fetch
+    // a bounded result set and normalise/filter locally so schemas using title,
+    // product_name, sale_price, etc. work without provider-specific AI logic.
+    if (this.hasExplicitFieldMap()) {
+      const nameCol = field(this.map, "name", "name");
+      const priceCol = field(this.map, "price", "price");
+      const categoryCol = field(this.map, "category", "category");
+      if (input.query) p.set(nameCol, `ilike.*${input.query.replace(/[%*,()]/g, "")}*`);
+      if (input.minPrice !== undefined) p.append(priceCol, `gte.${input.minPrice}`);
+      if (input.maxPrice !== undefined) p.append(priceCol, `lte.${input.maxPrice}`);
+      if (input.category) p.set(categoryCol, `ilike.*${input.category.replace(/[%*,()]/g, "")}*`);
+      for (const [logical, value] of Object.entries(input.attributes ?? {})) {
+        const col = safeIdent(this.map.fields?.[logical]);
+        if (col) p.set(col, `eq.${String(value).replace(/[,()]/g, "")}`);
+      }
     }
-    return (await this.rest.query(table, p)).map((r) => this.toProduct(r));
+
+    const products = (await this.rest.query(table, p))
+      .map((r) => this.toProduct(r))
+      .filter((p) => p.id !== "" && p.name !== "Unnamed product");
+    return this.hasExplicitFieldMap() ? products : products.filter((product) => this.matchesLocalFilters(product, input));
   }
 
   async getProduct(id: string | number): Promise<Product | null> {
     const table = safeIdent(this.map.table);
     if (!table) return null;
+    if (!this.hasExplicitFieldMap()) {
+      const products = await this.searchProducts({});
+      return products.find((p) => String(p.id) === String(id)) ?? null;
+    }
     const p = new URLSearchParams();
     p.set("select", this.selectFields().join(","));
     p.set(field(this.map, "id", "id"), `eq.${String(id).replace(/[,()]/g, "")}`);

@@ -14,7 +14,15 @@ export function env(name: string): string | undefined {
 
 export function databaseMode(): DatabaseMode {
   const v = env("DATABASE");
+  if (v === "memory") return "memory";
   if (v === "supabase") return "supabase";
+
+  // Supabase Edge Functions provide SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
+  // automatically. In that environment production must fail toward the real
+  // database, never toward seeded in-memory demo tenants/catalogues. Memory
+  // mode is therefore opt-in only (DATABASE=memory).
+  if (env("SUPABASE_URL") && env("SUPABASE_SERVICE_ROLE_KEY")) return "supabase";
+
   return "memory";
 }
 

@@ -47,3 +47,11 @@ Added automatic luminance detection to dynamically choose text color based on th
 ## Testing
 Test page created: `widget-color-test.html` (visual verification)
 Test page created: `widget-white-test.html` (live widget test)
+
+## 2026-09-03 Supabase catalogue hotfix
+- Production database mode now automatically selects Supabase when the Edge Function has SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY; in-memory mode is opt-in with DATABASE=memory.
+- Removed Ivy & Pearls product/order demo fixtures from runtime shared code and removed fabricated product cards from the widget demo.
+- Connected Supabase now implements `catalogue.read` using the conventional `products` table when no explicit catalogue mapping is supplied.
+- The Supabase catalogue adapter is schema-tolerant for common product field names (`name`/`title`/`product_name`, `price`/`sale_price`/`regular_price`, etc.) and performs bounded local filtering when no explicit field map exists.
+- Explicit capability mappings still override convention and remain required for non-standard table names.
+- Dashboard Supabase credential updates no longer erase an existing capability mapping/query policy when those editors are left blank.

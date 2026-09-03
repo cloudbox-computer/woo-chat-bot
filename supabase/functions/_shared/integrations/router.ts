@@ -71,11 +71,19 @@ export function createIntegrationRouter(tenant: Tenant): IntegrationRouter {
       capabilities.add("business_data.read");
     }
     const config = (tenant.supabaseCapabilityConfig ?? {}) as SupabaseCapabilityConfig;
-    // Do not silently guess a tenant schema. A configured mapping makes the
-    // provider authoritative for that capability. Existing higher-priority
-    // providers remain selected unless the tenant explicitly removes them.
-    if (config.catalogue?.table && (!registry.catalogue || config.catalogue.preferred === true)) {
-      registry.catalogue = new SupabaseCatalogueProvider(tenant, config.catalogue);
+
+    // Convention-over-configuration for the most common Supabase catalogue.
+    // If a tenant connects Supabase and has not supplied an explicit catalogue
+    // mapping, the provider-neutral catalogue capability targets `products`.
+    // The Supabase adapter performs schema-tolerant field normalisation and
+    // never exposes the provider/table name to the AI. An explicit mapping
+    // always wins and is required for non-standard table names.
+    const catalogueConfig = config.catalogue?.table
+      ? config.catalogue
+      : { table: "products", preferred: true, maxRows: 100 };
+
+    if (catalogueConfig.table && (!registry.catalogue || catalogueConfig.preferred === true)) {
+      registry.catalogue = new SupabaseCatalogueProvider(tenant, catalogueConfig);
       capabilities.add("catalogue.read");
     }
     if (config.orders?.table && (!registry.orders || config.orders.preferred === true)) {

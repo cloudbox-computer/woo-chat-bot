@@ -95,8 +95,10 @@ export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
         credentials: {
           url: effectiveUrl,
           anon_key: supaKey.trim() || undefined,
-          capability_config: capabilityConfig ?? (existingSupa?.capabilityConfig ? null : undefined),
-          query_policy: queryPolicy ?? (existingSupa?.queryPolicy ? null : undefined),
+          // Blank editors mean "keep the existing mapping/policy". Never
+          // silently erase a working capability configuration on credential updates.
+          capability_config: capabilityConfig,
+          query_policy: queryPolicy,
         },
       });
       setShowSupa(false);
