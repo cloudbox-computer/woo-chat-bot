@@ -1,5 +1,5 @@
 import React from "react";
-import { runOnboarding, analyzeWebsite, type OnboardingInput, type OnboardingResult } from "../lib/api";
+import { runOnboarding, analyzeWebsite, createTenant, type OnboardingInput, type OnboardingResult } from "../lib/api";
 import { supabase } from "../lib/supabase";
 import { toast } from "../components/ui";
 
@@ -119,17 +119,22 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
     setState((s) => ({ ...s, knowledge: s.knowledge.filter((_, idx) => idx !== i) }));
 
   async function submit() {
-    if (!tenantId) {
-      const message = "No tenant is selected. Return to the dashboard and create/select a tenant before onboarding.";
-      setError(message);
-      toast("err", message);
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
+      // A brand-new account may enter onboarding before any tenant exists.
+      // Create-or-resume through the atomic backend RPC exactly once, then use
+      // that returned id for every onboarding write. Existing incomplete
+      // tenants are always reused by the backend.
+      let onboardingTenantId = tenantId ?? null;
+      if (!onboardingTenantId) {
+        const tenantResult = await createTenant(state.name.trim());
+        onboardingTenantId = tenantResult.tenantId;
+      }
+      if (!onboardingTenantId) throw new Error("Unable to resolve onboarding tenant");
+
       const input: OnboardingInput = {
-        tenantId,
+        tenantId: onboardingTenantId,
         name: state.name,
         website: state.website || undefined,
         industry: state.industry || undefined,

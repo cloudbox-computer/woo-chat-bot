@@ -106,78 +106,37 @@ async function actionListTenants(req: Request) {
 async function actionCreateTenant(req: Request) {
   const user = authUserFromRequest(req);
   if (!user) throw new DashboardError("Not authenticated", 401);
-  const { url, serviceRoleKey } = supabaseConfig();
-  const base = `${url}/rest/v1`;
-  const headers: Record<string, string> = {
-    apikey: serviceRoleKey,
-    Authorization: `Bearer ${serviceRoleKey}`,
-    "Content-Type": "application/json",
-  };
 
   const body = (await req.json().catch(() => ({}))) as { name: string };
   const name = (body.name ?? "").trim();
   if (!name) throw new DashboardError("Tenant name is required", 400);
 
-  // Idempotency guard: if this user already owns an incomplete tenant with
-  // the same name, return it instead of creating another tenant. This makes
-  // retries/double-clicks safe during onboarding.
-  const membershipsRes = await fetch(
-    `${base}/tenant_members?user_id=eq.${encodeURIComponent(user.id)}&role=eq.owner&select=tenant_id`,
-    { headers },
-  );
-  if (!membershipsRes.ok) throw new DashboardError("Failed to check existing tenants", 502);
-  const memberships = await membershipsRes.json() as Array<{ tenant_id: string }>;
-  if (memberships.length) {
-    const ids = memberships.map((m) => m.tenant_id).join(",");
-    const existingRes = await fetch(
-      `${base}/tenants?id=in.(${ids})&onboarding_complete=is.false&select=id,slug,name&limit=100`,
-      { headers },
-    );
-    if (!existingRes.ok) throw new DashboardError("Failed to check existing tenants", 502);
-    const existingRows = await existingRes.json() as Array<{ id: string; slug: string; name: string }>;
-    const existing = existingRows.find((t) => t.name.trim().toLowerCase() === name.toLowerCase());
-    if (existing) {
-      return json({ ok: true, tenantId: existing.id, slug: existing.slug, reused: true });
-    }
-  }
-
-  const tenantId = crypto.randomUUID();
-  const slug = slugify(name);
-
-  // Check slug uniqueness (append suffix if needed)
-  let finalSlug = slug;
-  let suffix = 2;
-  while (true) {
-    const check = await fetch(`${base}/tenants?slug=eq.${finalSlug}&select=id`, { headers });
-    const checkData = await check.json() as Record<string, unknown>[];
-    if (!checkData.length) break;
-    finalSlug = `${slug}-${suffix}`;
-    suffix++;
-  }
-
-  const tenantCreate = await fetch(`${base}/tenants`, {
+  // IMPORTANT: creation is intentionally delegated to a database RPC. The RPC
+  // holds a per-user advisory transaction lock, making this operation atomic
+  // across double-clicks, retries, multiple browser tabs and concurrent Edge
+  // Function instances. A normal "SELECT then INSERT" is not race-safe.
+  const { url, serviceRoleKey } = supabaseConfig();
+  const rpc = await fetch(`${url.replace(/\/+$/g, "")}/rest/v1/rpc/create_or_reuse_onboarding_tenant`, {
     method: "POST",
-    headers,
-    body: JSON.stringify({ id: tenantId, slug: finalSlug, name, currency: "GBP", onboarding_complete: false }),
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ p_user: user.id, p_name: name }),
   });
-  if (!tenantCreate.ok) {
-    throw new DashboardError(`Failed to create tenant (${tenantCreate.status})`, 502);
+
+  if (!rpc.ok) {
+    const detail = await rpc.text();
+    console.error("atomic tenant creation failed", { status: rpc.status, detail: detail.slice(0, 500) });
+    throw new DashboardError("Failed to create or resume tenant", 502);
   }
 
-  // Auto-add creator as owner. Never return a tenant id to the browser unless
-  // its membership row was successfully created as well.
-  const membershipCreate = await fetch(`${base}/tenant_members`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ tenant_id: tenantId, user_id: user.id, role: "owner" }),
-  });
-  if (!membershipCreate.ok) {
-    await fetch(`${base}/tenants?id=eq.${tenantId}`, { method: "DELETE", headers }).catch(() => undefined);
-    throw new DashboardError(`Failed to link account to tenant (${membershipCreate.status})`, 502);
-  }
+  const rows = await rpc.json() as Array<{ tenant_id: string; slug: string; reused: boolean }>;
+  const row = rows[0];
+  if (!row?.tenant_id) throw new DashboardError("Tenant creation returned no tenant", 502);
 
-  // Return just the tenantId and slug — frontend will refresh tenant list
-  return json({ ok: true, tenantId, slug: finalSlug });
+  return json({ ok: true, tenantId: row.tenant_id, slug: row.slug, reused: row.reused === true });
 }
 
 // ---------------------------------------------------------------------------
