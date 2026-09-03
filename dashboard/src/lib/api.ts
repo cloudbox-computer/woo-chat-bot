@@ -52,6 +52,7 @@ export interface OnboardingKnowledge {
 }
 
 export interface OnboardingInput {
+  tenantId?: string;
   name: string;
   industry?: string;
   website?: string;

@@ -34,6 +34,7 @@ interface WizardIntegration {
 }
 
 interface OnboardingBody {
+  tenantId?: string;
   name?: string;
   industry?: string;
   website?: string;
@@ -73,19 +74,46 @@ export async function handleOnboarding(req: Request): Promise<Response> {
   };
 
   // --- tenant -------------------------------------------------------------
-  const tenantId = crypto.randomUUID();
-  const slug = slugify(name);
+  // If the dashboard created an incomplete tenant before launching this
+  // wizard, complete THAT tenant instead of silently creating a second one.
+  // The supplied tenant id is accepted only when the authenticated user is
+  // already a member of it.
+  const requestedTenantId = (body.tenantId ?? "").trim();
+  let tenantId = requestedTenantId || crypto.randomUUID();
+  let finalSlug = "";
+  const isExistingTenant = Boolean(requestedTenantId);
 
-  // Check slug uniqueness (append suffix if needed)
-  let finalSlug = slug;
-  let suffix = 2;
-  while (true) {
-    const check = await fetch(`${base}/tenants?slug=eq.${finalSlug}&select=id`, { headers });
-    const checkData = await check.json() as Record<string, unknown>[];
-    if (!checkData.length) break;
-    finalSlug = `${slug}-${suffix}`;
-    suffix++;
+  if (isExistingTenant) {
+    const membershipCheck = await fetch(
+      `${base}/tenant_members?tenant_id=eq.${encodeURIComponent(tenantId)}&user_id=eq.${encodeURIComponent(user.id)}&select=role&limit=1`,
+      { headers },
+    );
+    if (!membershipCheck.ok) throw new DashboardError("Failed to verify tenant membership", 502);
+    const membershipRows = await membershipCheck.json() as Array<{ role: string }>;
+    if (!membershipRows.length) throw new DashboardError("Not a member of this tenant", 403);
+
+    const tenantCheck = await fetch(
+      `${base}/tenants?id=eq.${encodeURIComponent(tenantId)}&select=id,slug&limit=1`,
+      { headers },
+    );
+    if (!tenantCheck.ok) throw new DashboardError("Failed to load tenant", 502);
+    const tenantRows = await tenantCheck.json() as Array<{ id: string; slug: string }>;
+    if (!tenantRows.length) throw new DashboardError("Tenant not found", 404);
+    finalSlug = tenantRows[0].slug;
+  } else {
+    const slug = slugify(name);
+    finalSlug = slug;
+    let suffix = 2;
+    while (true) {
+      const check = await fetch(`${base}/tenants?slug=eq.${encodeURIComponent(finalSlug)}&select=id`, { headers });
+      if (!check.ok) throw new DashboardError("Failed to check tenant slug", 502);
+      const checkData = await check.json() as Record<string, unknown>[];
+      if (!checkData.length) break;
+      finalSlug = `${slug}-${suffix}`;
+      suffix++;
+    }
   }
+
   const supportEmail = (body.supportEmail ?? "").trim() || undefined;
   if (supportEmail && !EMAIL_RE.test(supportEmail)) {
     throw new DashboardError("Support email looks invalid");
@@ -108,9 +136,10 @@ export async function handleOnboarding(req: Request): Promise<Response> {
   const refusalMessage =
     `I'm sorry, I can only help with ${name} products, orders, delivery, returns and other services provided by ${name}.`;
 
+  // Keep onboarding_complete false until every required resource has been
+  // created. A partially failed wizard must remain resumable rather than being
+  // mistaken for a finished tenant.
   const tenantRow = {
-    id: tenantId,
-    slug: finalSlug,
     name,
     store_url: (body.website ?? "").trim() || null,
     currency: "GBP",
@@ -127,47 +156,67 @@ export async function handleOnboarding(req: Request): Promise<Response> {
     auto_ticket_categories: JSON.stringify(
       Array.isArray(body.autoTicketCategories) ? body.autoTicketCategories : [],
     ),
-    onboarding_complete: true,
+    onboarding_complete: false,
   };
-  const resTenant = await fetch(`${base}/tenants`, {
-    method: "POST",
-    headers: { ...headers, Prefer: "return=minimal" },
-    body: JSON.stringify(tenantRow),
-  });
-  if (!resTenant.ok) throw new DashboardError(`Failed to create tenant: ${resTenant.status}`, 502);
 
-  // --- owner membership ---------------------------------------------------
-  const resMember = await fetch(`${base}/tenant_members`, {
-    method: "POST",
-    headers: { ...headers, Prefer: "return=minimal" },
-    body: JSON.stringify({ tenant_id: tenantId, user_id: user.id, role: "owner" }),
-  });
-  if (!resMember.ok) throw new DashboardError("Failed to link account to tenant", 502);
+  if (isExistingTenant) {
+    const resTenant = await fetch(`${base}/tenants?id=eq.${encodeURIComponent(tenantId)}`, {
+      method: "PATCH",
+      headers: { ...headers, Prefer: "return=minimal" },
+      body: JSON.stringify(tenantRow),
+    });
+    if (!resTenant.ok) throw new DashboardError(`Failed to update tenant: ${resTenant.status}`, 502);
+  } else {
+    const resTenant = await fetch(`${base}/tenants`, {
+      method: "POST",
+      headers: { ...headers, Prefer: "return=minimal" },
+      body: JSON.stringify({ id: tenantId, slug: finalSlug, ...tenantRow }),
+    });
+    if (!resTenant.ok) throw new DashboardError(`Failed to create tenant: ${resTenant.status}`, 502);
+
+    const resMember = await fetch(`${base}/tenant_members`, {
+      method: "POST",
+      headers: { ...headers, Prefer: "return=minimal" },
+      body: JSON.stringify({ tenant_id: tenantId, user_id: user.id, role: "owner" }),
+    });
+    if (!resMember.ok) {
+      await fetch(`${base}/tenants?id=eq.${encodeURIComponent(tenantId)}`, { method: "DELETE", headers }).catch(() => undefined);
+      throw new DashboardError("Failed to link account to tenant", 502);
+    }
+  }
 
   // --- chatbot ------------------------------------------------------------
-  const chatbotId = finalSlug;
   const botName = (body.botName ?? "").trim() || name;
-  // Opaque public widget id ("cb_..."): the customer embed snippet references
-  // this instead of the internal slug or the Supabase project URL (convo4.md).
-  const publicId = `cb_${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
-  const resBot = await fetch(`${base}/chatbots`, {
-    method: "POST",
-    headers: { ...headers, Prefer: "return=minimal" },
-    body: JSON.stringify({
-      id: chatbotId,
-      tenant_id: tenantId,
-      name: botName,
-      active: true,
-      public_id: publicId,
-      config: {
-        permissions: ["read", "cart", "support"],
-        welcome: (body.welcomeMessage ?? "").trim(),
-        tone: (body.tone ?? "friendly").trim(),
-        avatar_url: null,
-      },
-    }),
-  });
-  if (!resBot.ok) throw new DashboardError("Failed to create chatbot", 502);
+  const existingBotRes = await fetch(
+    `${base}/chatbots?tenant_id=eq.${encodeURIComponent(tenantId)}&select=id,public_id&order=created_at.asc&limit=1`,
+    { headers },
+  );
+  if (!existingBotRes.ok) throw new DashboardError("Failed to check existing chatbot", 502);
+  const existingBots = await existingBotRes.json() as Array<{ id: string; public_id: string | null }>;
+  const existingBot = existingBots[0];
+  const chatbotId = existingBot?.id ?? finalSlug;
+  const publicId = existingBot?.public_id || `cb_${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const botPayload = {
+    tenant_id: tenantId,
+    name: botName,
+    active: true,
+    public_id: publicId,
+    config: {
+      permissions: ["read", "cart", "support"],
+      welcome: (body.welcomeMessage ?? "").trim(),
+      tone: (body.tone ?? "friendly").trim(),
+      avatar_url: null,
+    },
+  };
+  const resBot = await fetch(
+    existingBot ? `${base}/chatbots?id=eq.${encodeURIComponent(chatbotId)}` : `${base}/chatbots`,
+    {
+      method: existingBot ? "PATCH" : "POST",
+      headers: { ...headers, Prefer: "return=minimal" },
+      body: JSON.stringify(existingBot ? botPayload : { id: chatbotId, ...botPayload }),
+    },
+  );
+  if (!resBot.ok) throw new DashboardError(existingBot ? "Failed to update chatbot" : "Failed to create chatbot", 502);
 
   // --- knowledge ----------------------------------------------------------
   const knowledge = Array.isArray(body.knowledge) ? body.knowledge : [];
@@ -218,12 +267,21 @@ export async function handleOnboarding(req: Request): Promise<Response> {
     }
   }
 
+  // Mark the tenant complete only after the chatbot, knowledge and integration
+  // writes above succeeded.
+  const completeTenant = await fetch(`${base}/tenants?id=eq.${encodeURIComponent(tenantId)}`, {
+    method: "PATCH",
+    headers: { ...headers, Prefer: "return=minimal" },
+    body: JSON.stringify({ onboarding_complete: true }),
+  });
+  if (!completeTenant.ok) throw new DashboardError("Failed to finalize onboarding", 502);
+
   const embedScript = embedScriptFor(publicId);
 
   return json({
     ok: true,
     tenantId,
-    slug,
+    slug: finalSlug,
     chatbotId,
     publicId,
     embedScript,

@@ -81,7 +81,12 @@ const initial: WizardState = {
   autoTicketCategories: [],
 };
 
-export default function Onboarding() {
+interface OnboardingProps {
+  tenantId?: string | null;
+  onComplete?: (tenantId: string) => void;
+}
+
+export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
   const [step, setStep] = React.useState(0);
   const [state, setState] = React.useState<WizardState>(initial);
   const [busy, setBusy] = React.useState(false);
@@ -118,6 +123,7 @@ export default function Onboarding() {
     setError(null);
     try {
       const input: OnboardingInput = {
+        tenantId: tenantId || undefined,
         name: state.name,
         website: state.website || undefined,
         industry: state.industry || undefined,
@@ -473,7 +479,10 @@ export default function Onboarding() {
                   Public chatbot ID <strong>{result.publicId}</strong>. This is the only tenant identifier included in the installation snippet.
                   The snippet is also shown in the dashboard under <strong>Install</strong>.
                 </p>
-                <a href="/" className="btn" style={{ marginTop: 12 }}>Open your dashboard</a>
+                <button type="button" className="btn" style={{ marginTop: 12 }} onClick={() => {
+                  if (onComplete) onComplete(result.tenantId);
+                  else window.location.assign("/");
+                }}>Open your dashboard</button>
               </>
             )}
           </>

@@ -132,18 +132,26 @@ async function actionCreateTenant(req: Request) {
     suffix++;
   }
 
-  await fetch(`${base}/tenants`, {
+  const tenantCreate = await fetch(`${base}/tenants`, {
     method: "POST",
     headers,
     body: JSON.stringify({ id: tenantId, slug: finalSlug, name, currency: "GBP", onboarding_complete: false }),
   });
+  if (!tenantCreate.ok) {
+    throw new DashboardError(`Failed to create tenant (${tenantCreate.status})`, 502);
+  }
 
-  // Auto-add creator as owner
-  await fetch(`${base}/tenant_members`, {
+  // Auto-add creator as owner. Never return a tenant id to the browser unless
+  // its membership row was successfully created as well.
+  const membershipCreate = await fetch(`${base}/tenant_members`, {
     method: "POST",
     headers,
     body: JSON.stringify({ tenant_id: tenantId, user_id: user.id, role: "owner" }),
   });
+  if (!membershipCreate.ok) {
+    await fetch(`${base}/tenants?id=eq.${tenantId}`, { method: "DELETE", headers }).catch(() => undefined);
+    throw new DashboardError(`Failed to link account to tenant (${membershipCreate.status})`, 502);
+  }
 
   // Return just the tenantId and slug — frontend will refresh tenant list
   return json({ ok: true, tenantId, slug: finalSlug });

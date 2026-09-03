@@ -1,4 +1,4 @@
-﻿import React from "react";
+import React from "react";
 import { Routes } from "react-router-dom";
 import { supabase } from "./lib/supabase";
 import { getConfig, ApiError, type TenantSummary, listTenants } from './lib/api';
@@ -50,13 +50,20 @@ export default function App() {
       setTenants(tenantsRes.tenants);
 
       let currentTenantId = forceTenantId || selectedTenantIdRef.current;
-      if (tenantsRes.tenants.length > 0 && !currentTenantId) {
-        currentTenantId = tenantsRes.tenants[0].id;
-        setSelectedTenantId(currentTenantId);
-        saveSelectedTenantId(currentTenantId);
-      } else if (currentTenantId) {
-        saveSelectedTenantId(currentTenantId);
+      const validTenantIds = new Set(tenantsRes.tenants.map((tenant) => tenant.id));
+
+      // localStorage is shared by browser profile, not by Supabase user. Never
+      // trust a persisted tenant id unless it belongs to the current account.
+      if (currentTenantId && !validTenantIds.has(currentTenantId)) {
+        currentTenantId = tenantsRes.tenants[0]?.id ?? null;
       }
+      if (!currentTenantId && tenantsRes.tenants.length > 0) {
+        currentTenantId = tenantsRes.tenants[0].id;
+      }
+
+      setSelectedTenantId(currentTenantId);
+      selectedTenantIdRef.current = currentTenantId;
+      saveSelectedTenantId(currentTenantId);
 
       if (currentTenantId) {
         const configData = await getConfig(currentTenantId);
@@ -72,7 +79,14 @@ export default function App() {
       setState({ status: "dashboard" });
     } catch (err) {
       resolvedRef.current = true;
-      if (err instanceof ApiError && (err.status === 404 || err.status === 400)) {
+      if (err instanceof ApiError && err.status === 403) {
+        // A stale/foreign selected tenant must never become the active dashboard
+        // context. Clear it so the next refresh resolves from real memberships.
+        setSelectedTenantId(null);
+        selectedTenantIdRef.current = null;
+        saveSelectedTenantId(null);
+        setState({ status: tenants.length ? "dashboard" : "onboarding" });
+      } else if (err instanceof ApiError && (err.status === 404 || err.status === 400)) {
         setState({ status: "onboarding" });
       } else {
         setState({ status: "dashboard" });
@@ -99,8 +113,16 @@ export default function App() {
   if (state.status === "signed-out") {
     return (<><AuthPage /><ToastHost /></>);
   }
+  function handleOnboardingComplete(tenantId: string) {
+    setSelectedTenantId(tenantId);
+    selectedTenantIdRef.current = tenantId;
+    saveSelectedTenantId(tenantId);
+    resolvedRef.current = false;
+    void refresh(tenantId);
+  }
+
   if (state.status === "onboarding") {
-    return (<><Onboarding /><ToastHost /></>);
+    return (<><Onboarding tenantId={selectedTenantId} onComplete={handleOnboardingComplete} /><ToastHost /></>);
   }
 
 
