@@ -5,10 +5,12 @@
   "description": "Tenant-based e-commerce chatbot platform (Supabase Edge Functions + React widget). First tenant: Ivy & Pearls.",
   "scripts": {
     "dev": "bun scripts/dev-server.ts",
+    "build": "npm run build --workspace=dashboard",
     "build:widget": "bun --cwd widget build",
     "test": "bun scripts/local-test.ts",
     "typecheck": "bunx tsc --noEmit -p supabase && bun --cwd widget typecheck"
   },
+  "workspaces": ["dashboard"],
   "devDependencies": {
     "@types/deno": "^2.7.0",
     "deno": "^2.9.5"
