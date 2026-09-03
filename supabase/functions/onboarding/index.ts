@@ -2,11 +2,11 @@
 //
 // POST /onboarding   — authenticated (verify_jwt=true).
 //
-// The tenant-dashboard wizard calls this once per signup. It atomically
-// creates: the tenant row, the owning tenant_members row (linking the auth
-// user), the default chatbot, seed knowledge items and the WooCommerce
-// integration. On completion the tenant is marked onboarding_complete and the
-// dashboard can move the user to the "Install" step.
+// The tenant-dashboard wizard completes an existing tenant created by the
+// dashboard. It NEVER creates a tenant itself. The supplied tenantId is
+// membership-checked, then the tenant, chatbot, knowledge and integrations are
+// updated idempotently. On completion the same tenant is marked
+// onboarding_complete and the dashboard can move to the "Install" step.
 //
 // Body (all optional, server applies defaults):
 //   {
@@ -18,7 +18,7 @@
 //     integrations: [{ provider:"woocommerce", credentials:{url,consumer_key,consumer_secret} }],
 //     defaultTicketPriority, autoTicketCategories: string[]
 //   }
-import { DashboardError, authUserFromRequest, embedScriptFor, slugify } from "../_shared/dashboard.ts";
+import { DashboardError, authUserFromRequest, embedScriptFor } from "../_shared/dashboard.ts";
 import { handleOptions, json } from "../_shared/cors.ts";
 import { env, supabaseConfig, aiConfig, modelFor } from "../_shared/env.ts";
 import { OpenAiCompatibleProvider } from "../_shared/ai.ts";
@@ -79,11 +79,16 @@ export async function handleOnboarding(req: Request): Promise<Response> {
   // The supplied tenant id is accepted only when the authenticated user is
   // already a member of it.
   const requestedTenantId = (body.tenantId ?? "").trim();
-  let tenantId = requestedTenantId || crypto.randomUUID();
+  if (!requestedTenantId) {
+    throw new DashboardError(
+      "tenantId is required. Create the tenant first, then complete that tenant through onboarding.",
+      400,
+    );
+  }
+  const tenantId = requestedTenantId;
   let finalSlug = "";
-  const isExistingTenant = Boolean(requestedTenantId);
 
-  if (isExistingTenant) {
+  {
     const membershipCheck = await fetch(
       `${base}/tenant_members?tenant_id=eq.${encodeURIComponent(tenantId)}&user_id=eq.${encodeURIComponent(user.id)}&select=role&limit=1`,
       { headers },
@@ -100,18 +105,6 @@ export async function handleOnboarding(req: Request): Promise<Response> {
     const tenantRows = await tenantCheck.json() as Array<{ id: string; slug: string }>;
     if (!tenantRows.length) throw new DashboardError("Tenant not found", 404);
     finalSlug = tenantRows[0].slug;
-  } else {
-    const slug = slugify(name);
-    finalSlug = slug;
-    let suffix = 2;
-    while (true) {
-      const check = await fetch(`${base}/tenants?slug=eq.${encodeURIComponent(finalSlug)}&select=id`, { headers });
-      if (!check.ok) throw new DashboardError("Failed to check tenant slug", 502);
-      const checkData = await check.json() as Record<string, unknown>[];
-      if (!checkData.length) break;
-      finalSlug = `${slug}-${suffix}`;
-      suffix++;
-    }
   }
 
   const supportEmail = (body.supportEmail ?? "").trim() || undefined;
@@ -159,31 +152,12 @@ export async function handleOnboarding(req: Request): Promise<Response> {
     onboarding_complete: false,
   };
 
-  if (isExistingTenant) {
-    const resTenant = await fetch(`${base}/tenants?id=eq.${encodeURIComponent(tenantId)}`, {
-      method: "PATCH",
-      headers: { ...headers, Prefer: "return=minimal" },
-      body: JSON.stringify(tenantRow),
-    });
-    if (!resTenant.ok) throw new DashboardError(`Failed to update tenant: ${resTenant.status}`, 502);
-  } else {
-    const resTenant = await fetch(`${base}/tenants`, {
-      method: "POST",
-      headers: { ...headers, Prefer: "return=minimal" },
-      body: JSON.stringify({ id: tenantId, slug: finalSlug, ...tenantRow }),
-    });
-    if (!resTenant.ok) throw new DashboardError(`Failed to create tenant: ${resTenant.status}`, 502);
-
-    const resMember = await fetch(`${base}/tenant_members`, {
-      method: "POST",
-      headers: { ...headers, Prefer: "return=minimal" },
-      body: JSON.stringify({ tenant_id: tenantId, user_id: user.id, role: "owner" }),
-    });
-    if (!resMember.ok) {
-      await fetch(`${base}/tenants?id=eq.${encodeURIComponent(tenantId)}`, { method: "DELETE", headers }).catch(() => undefined);
-      throw new DashboardError("Failed to link account to tenant", 502);
-    }
-  }
+  const resTenant = await fetch(`${base}/tenants?id=eq.${encodeURIComponent(tenantId)}`, {
+    method: "PATCH",
+    headers: { ...headers, Prefer: "return=minimal" },
+    body: JSON.stringify(tenantRow),
+  });
+  if (!resTenant.ok) throw new DashboardError(`Failed to update tenant: ${resTenant.status}`, 502);
 
   // --- chatbot ------------------------------------------------------------
   const botName = (body.botName ?? "").trim() || name;
@@ -219,51 +193,56 @@ export async function handleOnboarding(req: Request): Promise<Response> {
   if (!resBot.ok) throw new DashboardError(existingBot ? "Failed to update chatbot" : "Failed to create chatbot", 502);
 
   // --- knowledge ----------------------------------------------------------
+  // Re-running onboarding updates an existing same-title item instead of
+  // duplicating seed knowledge.
   const knowledge = Array.isArray(body.knowledge) ? body.knowledge : [];
   for (const k of knowledge.slice(0, 200)) {
     const title = (k.title ?? "").trim();
     const content = (k.content ?? "").trim();
     if (!title || !content) continue;
-    const res = await fetch(`${base}/knowledge`, {
-      method: "POST",
-      headers: { ...headers, Prefer: "return=minimal" },
-      body: JSON.stringify({
-        chatbot_id: chatbotId,
-        title,
-        content,
-        keywords: Array.isArray(k.keywords) ? k.keywords : [],
-      }),
-    });
+    const existingKnowledgeRes = await fetch(
+      `${base}/knowledge?chatbot_id=eq.${encodeURIComponent(chatbotId)}&title=eq.${encodeURIComponent(title)}&select=id&limit=1`,
+      { headers },
+    );
+    if (!existingKnowledgeRes.ok) throw new DashboardError("Failed to check knowledge item", 502);
+    const existingKnowledge = await existingKnowledgeRes.json() as Array<{ id: string }>;
+    const payload = {
+      chatbot_id: chatbotId,
+      title,
+      content,
+      keywords: Array.isArray(k.keywords) ? k.keywords : [],
+    };
+    const res = await fetch(
+      existingKnowledge[0]
+        ? `${base}/knowledge?id=eq.${encodeURIComponent(existingKnowledge[0].id)}`
+        : `${base}/knowledge`,
+      {
+        method: existingKnowledge[0] ? "PATCH" : "POST",
+        headers: { ...headers, Prefer: "return=minimal" },
+        body: JSON.stringify(payload),
+      },
+    );
     if (!res.ok) throw new DashboardError("Failed to save knowledge item", 502);
   }
 
   // --- integrations -------------------------------------------------------
+  // integrations has a unique (tenant_id, provider) key. Use PostgREST upsert
+  // semantics so retries update the same integration rather than failing or
+  // creating another row.
   const integrations = Array.isArray(body.integrations) ? body.integrations : [];
   for (const integ of integrations) {
-    if (integ.provider === "woocommerce" && integ.credentials) {
-      const res = await fetch(`${base}/integrations`, {
+    if ((integ.provider === "woocommerce" || integ.provider === "supabase") && integ.credentials) {
+      const res = await fetch(`${base}/integrations?on_conflict=tenant_id,provider`, {
         method: "POST",
-        headers: { ...headers, Prefer: "return=minimal" },
+        headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify({
           tenant_id: tenantId,
-          provider: "woocommerce",
+          provider: integ.provider,
           credentials: integ.credentials,
           active: true,
         }),
       });
-      if (!res.ok) throw new DashboardError("Failed to save WooCommerce integration", 502);
-    } else if (integ.provider === "supabase" && integ.credentials) {
-      const res = await fetch(`${base}/integrations`, {
-        method: "POST",
-        headers: { ...headers, Prefer: "return=minimal" },
-        body: JSON.stringify({
-          tenant_id: tenantId,
-          provider: "supabase",
-          credentials: integ.credentials,
-          active: true,
-        }),
-      });
-      if (!res.ok) throw new DashboardError("Failed to save Supabase integration", 502);
+      if (!res.ok) throw new DashboardError(`Failed to save ${integ.provider} integration`, 502);
     }
   }
 

@@ -1,2 +1,14 @@
-import React from "react"; import { getOperations } from "../lib/api";
-export default function OperationsPage({tenantId}:{tenantId:string}){const[data,setData]=React.useState<{health:Array<Record<string,unknown>>;jobs:Array<Record<string,unknown>>;usage:Record<string,unknown>}|null>(null);React.useEffect(()=>{getOperations(tenantId).then(setData)},[tenantId]);return <div className="page"><h1>Operations</h1><p className="desc">Integration health, background jobs and tenant usage telemetry.</p><div className="card"><h2>Integration health</h2>{!data?.health.length?<p className="muted">No health checks recorded yet.</p>:data.health.map((h,i)=><div key={i}><b>{String(h.provider)}</b> — {String(h.status)} {h.checked_at?`· ${new Date(String(h.checked_at)).toLocaleString()}`:""}</div>)}</div><div className="card"><h2>Background jobs</h2>{!data?.jobs.length?<p className="muted">No queued jobs.</p>:data.jobs.map((j,i)=><div key={i}><code>{String(j.kind)}</code> — {String(j.status)} · attempts {String(j.attempts)}</div>)}</div></div>}
+import React from "react";
+import { getOperations } from "../lib/api";
+
+export default function OperationsPage({tenantId}:{tenantId:string}) {
+  const [data,setData]=React.useState<{health:Array<Record<string,unknown>>;jobs:Array<Record<string,unknown>>;usage:Record<string,unknown>}|null>(null);
+  const [error,setError]=React.useState<string|null>(null);
+  React.useEffect(()=>{
+    let cancelled=false;
+    setData(null); setError(null);
+    getOperations(tenantId).then((next)=>{if(!cancelled)setData(next)}).catch((e)=>{if(!cancelled)setError(e instanceof Error?e.message:"Failed to load operations")});
+    return()=>{cancelled=true};
+  },[tenantId]);
+  return <div className="page"><h1>Operations</h1><p className="desc">Integration health, background jobs and tenant usage telemetry.</p>{error&&<div className="err">{error}</div>}<div className="card"><h2>Integration health</h2>{!data?.health.length?<p className="muted">No health checks recorded yet.</p>:data.health.map((h,i)=><div key={i}><b>{String(h.provider)}</b> — {String(h.status)} {h.checked_at?`· ${new Date(String(h.checked_at)).toLocaleString()}`:""}</div>)}</div><div className="card"><h2>Background jobs</h2>{!data?.jobs.length?<p className="muted">No queued jobs.</p>:data.jobs.map((j,i)=><div key={i}><code>{String(j.kind)}</code> — {String(j.status)} · attempts {String(j.attempts)}</div>)}</div></div>;
+}

@@ -118,6 +118,29 @@ async function actionCreateTenant(req: Request) {
   const name = (body.name ?? "").trim();
   if (!name) throw new DashboardError("Tenant name is required", 400);
 
+  // Idempotency guard: if this user already owns an incomplete tenant with
+  // the same name, return it instead of creating another tenant. This makes
+  // retries/double-clicks safe during onboarding.
+  const membershipsRes = await fetch(
+    `${base}/tenant_members?user_id=eq.${encodeURIComponent(user.id)}&role=eq.owner&select=tenant_id`,
+    { headers },
+  );
+  if (!membershipsRes.ok) throw new DashboardError("Failed to check existing tenants", 502);
+  const memberships = await membershipsRes.json() as Array<{ tenant_id: string }>;
+  if (memberships.length) {
+    const ids = memberships.map((m) => m.tenant_id).join(",");
+    const existingRes = await fetch(
+      `${base}/tenants?id=in.(${ids})&onboarding_complete=is.false&select=id,slug,name&limit=100`,
+      { headers },
+    );
+    if (!existingRes.ok) throw new DashboardError("Failed to check existing tenants", 502);
+    const existingRows = await existingRes.json() as Array<{ id: string; slug: string; name: string }>;
+    const existing = existingRows.find((t) => t.name.trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      return json({ ok: true, tenantId: existing.id, slug: existing.slug, reused: true });
+    }
+  }
+
   const tenantId = crypto.randomUUID();
   const slug = slugify(name);
 

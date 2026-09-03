@@ -119,11 +119,17 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
     setState((s) => ({ ...s, knowledge: s.knowledge.filter((_, idx) => idx !== i) }));
 
   async function submit() {
+    if (!tenantId) {
+      const message = "No tenant is selected. Return to the dashboard and create/select a tenant before onboarding.";
+      setError(message);
+      toast("err", message);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const input: OnboardingInput = {
-        tenantId: tenantId || undefined,
+        tenantId,
         name: state.name,
         website: state.website || undefined,
         industry: state.industry || undefined,
