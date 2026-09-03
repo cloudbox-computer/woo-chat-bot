@@ -6,6 +6,6 @@ mountWidget(document.getElementById("root")!, {
   chatbotId: "ivy-pearls",
   apiUrl: import.meta.env.VITE_API_URL ?? "http://localhost:54321/functions/v1",
   brandColour: "#9c7b4f",
-  title: "Ivy & Pearls",
-  subtitle: "Hi! I can help you find jewellery, check an order, or recommend a gift. What are you looking for?",
+  title: "Example Business",
+  subtitle: "Hi! How can I help today?",
 });

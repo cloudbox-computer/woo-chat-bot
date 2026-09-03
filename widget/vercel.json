@@ -1,0 +1,23 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "installCommand": "npm install",
+  "rewrites": [
+    {
+      "source": "/widget-config",
+      "destination": "https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/widget-config"
+    },
+    {
+      "source": "/chat",
+      "destination": "https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/chat"
+    },
+    {
+      "source": "/feedback",
+      "destination": "https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/feedback"
+    },
+    {
+      "source": "/conversation-sync",
+      "destination": "https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/conversation-sync"
+    }
+  ]
+}

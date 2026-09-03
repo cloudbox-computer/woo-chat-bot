@@ -105,40 +105,90 @@ async function actionListTenants(req: Request) {
 // ---------------------------------------------------------------------------
 async function actionCreateTenant(req: Request) {
   const user = authUserFromRequest(req);
-  if (!user) throw new DashboardError("Not authenticated", 401);
 
-  const body = (await req.json().catch(() => ({}))) as { name: string };
-  const name = (body.name ?? "").trim();
-  if (!name) throw new DashboardError("Tenant name is required", 400);
+  if (!user) {
+    throw new DashboardError("Not authenticated", 401);
+  }
 
-  // IMPORTANT: creation is intentionally delegated to a database RPC. The RPC
-  // holds a per-user advisory transaction lock, making this operation atomic
-  // across double-clicks, retries, multiple browser tabs and concurrent Edge
-  // Function instances. A normal "SELECT then INSERT" is not race-safe.
+  const body = (await req.json().catch(() => ({}))) as {
+    name?: string;
+  };
+
+  const name = String(body.name ?? "").trim();
+
+  if (!name) {
+    throw new DashboardError("Tenant name is required", 400);
+  }
+
   const { url, serviceRoleKey } = supabaseConfig();
-  const rpc = await fetch(`${url.replace(/\/+$/g, "")}/rest/v1/rpc/create_or_reuse_onboarding_tenant`, {
+
+  const rpcUrl =
+    `${url.replace(/\/+$/g, "")}` +
+    `/rest/v1/rpc/create_or_reuse_onboarding_tenant`;
+
+  const rpc = await fetch(rpcUrl, {
     method: "POST",
     headers: {
       apikey: serviceRoleKey,
       Authorization: `Bearer ${serviceRoleKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ p_user: user.id, p_name: name }),
+    body: JSON.stringify({
+      p_user: user.id,
+      p_name: name,
+    }),
   });
 
+  const raw = await rpc.text();
+
   if (!rpc.ok) {
-    const detail = await rpc.text();
-    console.error("atomic tenant creation failed", { status: rpc.status, detail: detail.slice(0, 500) });
-    throw new DashboardError("Failed to create or resume tenant", 502);
+    console.error("create_or_reuse_onboarding_tenant RPC failed", {
+      status: rpc.status,
+      response: raw,
+      userId: user.id,
+    });
+
+    throw new DashboardError(
+      `Tenant creation failed (${rpc.status})`,
+      502,
+    );
   }
 
-  const rows = await rpc.json() as Array<{ tenant_id: string; slug: string; reused: boolean }>;
+  let rows: Array<{
+    tenant_id: string;
+    tenant_slug: string;
+    reused: boolean;
+  }>;
+
+  try {
+    rows = JSON.parse(raw);
+  } catch {
+    console.error("Invalid tenant creation RPC response", raw);
+
+    throw new DashboardError(
+      "Tenant creation returned an invalid response",
+      502,
+    );
+  }
+
   const row = rows[0];
-  if (!row?.tenant_id) throw new DashboardError("Tenant creation returned no tenant", 502);
 
-  return json({ ok: true, tenantId: row.tenant_id, slug: row.slug, reused: row.reused === true });
+  if (!row?.tenant_id) {
+    console.error("Tenant RPC returned no row", rows);
+
+    throw new DashboardError(
+      "Tenant creation returned no tenant",
+      502,
+    );
+  }
+
+  return json({
+    ok: true,
+    tenantId: row.tenant_id,
+    slug: row.tenant_slug,
+    reused: row.reused === true,
+  });
 }
-
 // ---------------------------------------------------------------------------
 // overview — counts + recent activity for the landing card grid
 // ---------------------------------------------------------------------------
@@ -218,6 +268,13 @@ async function actionGetConfig(ctx: Awaited<ReturnType<typeof resolveDashboardCo
   });
   const tenant = rows[0];
   if (!tenant) throw new DashboardError("Tenant not found", 404);
+  const tenantScope =
+    tenant.scope && typeof tenant.scope === "object"
+      ? (tenant.scope as Record<string, unknown>)
+      : {};
+  const tenantAllowedTopics = Array.isArray(tenantScope.allowedTopics)
+    ? tenantScope.allowedTopics.map((topic) => String(topic)).filter(Boolean)
+    : [];
 
   const botRows = await getRows(c, "chatbots", {
     select: "id,public_id,name,active,config",
@@ -238,6 +295,12 @@ async function actionGetConfig(ctx: Awaited<ReturnType<typeof resolveDashboardCo
       assistantHeaderMessage: tenant.assistant_header_message ?? null,
       tone: tenant.tone ?? null,
       businessContext: tenant.business_context ?? null,
+      allowedTopics: tenantAllowedTopics,
+      refusalMessage: tenant.refusal_message ?? null,
+      securityLevel:
+        tenantScope.securityLevel === "standard" || tenantScope.securityLevel === "extra-strict"
+          ? tenantScope.securityLevel
+          : "strict",
       defaultTicketPriority: tenant.default_ticket_priority ?? "normal",
       autoTicketCategories: tenant.auto_ticket_categories ?? [],
       onboardingComplete: tenant.onboarding_complete === true,
@@ -301,6 +364,43 @@ async function actionUpdateConfig(
     patch.brand_colour = colour ? (colour.startsWith("#") ? colour : `#${colour}`) : null;
   }
 
+  if ("refusalMessage" in body) {
+    patch.refusal_message = str(body.refusalMessage) || null;
+  }
+
+  if ("allowedTopics" in body || "securityLevel" in body) {
+    const currentRows = await getRows(c, "tenants", {
+      select: "scope",
+      id: `eq.${ctx.tenantId}`,
+      limit: "1",
+    });
+    const currentScope =
+      currentRows[0]?.scope && typeof currentRows[0].scope === "object"
+        ? { ...(currentRows[0].scope as Record<string, unknown>) }
+        : {};
+
+    if ("allowedTopics" in body) {
+      if (!Array.isArray(body.allowedTopics)) throw new DashboardError("allowedTopics must be an array");
+      currentScope.allowedTopics = body.allowedTopics
+        .map((topic) => String(topic).trim())
+        .filter(Boolean)
+        .slice(0, 100);
+    }
+
+    if ("securityLevel" in body) {
+      const security = str(body.securityLevel);
+      if (!security || !["standard", "strict", "extra-strict"].includes(security)) {
+        throw new DashboardError("Invalid security level");
+      }
+      currentScope.securityLevel = security;
+    }
+
+    // Free-text scope is evaluated semantically; keep this enabled unless a
+    // future tenant setting explicitly exposes an opt-out.
+    currentScope.useModelClassifier = true;
+    patch.scope = currentScope;
+  }
+
   if (Object.keys(patch).length) {
     await write(c, "PATCH", `tenants?id=eq.${ctx.tenantId}`, patch);
   }
@@ -326,6 +426,19 @@ async function actionUpdateConfig(
         if (typeof cb.welcome === "string") cfg.welcome = cb.welcome;
         if (typeof cb.tone === "string") cfg.tone = cb.tone;
         if ("avatar_url" in cb) cfg.avatar_url = cb.avatar_url;
+        if (Array.isArray(cb.quickActions)) {
+          cfg.quickActions = cb.quickActions.slice(0, 8).map((item) => {
+            if (typeof item === "string") {
+              const text = item.trim();
+              return text ? { label: text, prompt: text } : null;
+            }
+            if (!item || typeof item !== "object") return null;
+            const row = item as Record<string, unknown>;
+            const label = typeof row.label === "string" ? row.label.trim() : "";
+            const prompt = typeof row.prompt === "string" ? row.prompt.trim() : label;
+            return label ? { label, prompt: prompt || label } : null;
+          }).filter(Boolean);
+        }
         botPatch.config = cfg;
       }
       if (Object.keys(botPatch).length) {

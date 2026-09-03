@@ -46,6 +46,8 @@ interface OnboardingBody {
   tone?: string;
   brandColour?: string;
   allowedTopics?: string[];
+  quickActions?: Array<{ label?: string; prompt?: string } | string>;
+  refusalMessage?: string;
   securityLevel?: "standard" | "strict" | "extra-strict";
   knowledge?: WizardKnowledge[];
   integrations?: WizardIntegration[];
@@ -120,14 +122,19 @@ export async function handleOnboarding(req: Request): Promise<Response> {
     throw new DashboardError("Brand colour must be a hex value like #7c3aed");
   }
 
+  const allowedTopics = Array.isArray(body.allowedTopics)
+    ? body.allowedTopics.map((topic) => String(topic).trim()).filter(Boolean).slice(0, 100)
+    : [];
   const scope = {
-    allowedTopics: Array.isArray(body.allowedTopics) ? body.allowedTopics : [],
+    allowedTopics,
     securityLevel: ["standard", "strict", "extra-strict"].includes(body.securityLevel ?? "")
       ? body.securityLevel
       : "strict",
+    useModelClassifier: true,
   };
   const refusalMessage =
-    `I'm sorry, I can only help with ${name} products, orders, delivery, returns and other services provided by ${name}.`;
+    (body.refusalMessage ?? "").trim() ||
+    `I'm sorry, I can only help with ${name} and enquiries related to this business.`;
 
   // Keep onboarding_complete false until every required resource has been
   // created. A partially failed wizard must remain resumable rather than being
@@ -161,6 +168,18 @@ export async function handleOnboarding(req: Request): Promise<Response> {
 
   // --- chatbot ------------------------------------------------------------
   const botName = (body.botName ?? "").trim() || name;
+  const quickActions = Array.isArray(body.quickActions)
+    ? body.quickActions.slice(0, 8).map((item) => {
+        if (typeof item === "string") {
+          const text = item.trim();
+          return text ? { label: text, prompt: text } : null;
+        }
+        if (!item || typeof item !== "object") return null;
+        const label = typeof item.label === "string" ? item.label.trim() : "";
+        const prompt = typeof item.prompt === "string" ? item.prompt.trim() : label;
+        return label ? { label, prompt: prompt || label } : null;
+      }).filter((item): item is { label: string; prompt: string } => item !== null)
+    : [];
   const existingBotRes = await fetch(
     `${base}/chatbots?tenant_id=eq.${encodeURIComponent(tenantId)}&select=id,public_id&order=created_at.asc&limit=1`,
     { headers },
@@ -180,6 +199,7 @@ export async function handleOnboarding(req: Request): Promise<Response> {
       welcome: (body.welcomeMessage ?? "").trim(),
       tone: (body.tone ?? "friendly").trim(),
       avatar_url: null,
+      quickActions,
     },
   };
   const resBot = await fetch(
@@ -272,24 +292,18 @@ export async function handleOnboarding(req: Request): Promise<Response> {
 // Analyze website handler
 // ---------------------------------------------------------------------------
 
-const ANALYZE_SYSTEM_PROMPT = `You are an expert at analyzing e-commerce websites and extracting business information for chatbot onboarding.
+const ANALYZE_SYSTEM_PROMPT = `You analyze any kind of business website for chatbot onboarding.
 
-Given a website's structured content, extract accurate business information and return ONLY valid JSON (no markdown, no explanation, no code blocks) with this exact shape:
-{"name":"Business name","industry":"Industry name","businessContext":"Key business details like shipping, returns, products","botName":"Suggested assistant name","welcomeMessage":"A friendly welcome message for customers","tone":"friendly","brandColour":"#hexcolor","allowedTopics":["products","orders","returns","support"],"securityLevel":"strict","knowledge":[{"title":"FAQ Title","content":"Answer content","keywords":["keyword1","keyword2"]}]}`;
+Return ONLY valid JSON (no markdown or explanation) with this exact shape:
+{"name":"Business name","industry":"Industry/category stated or clearly evidenced by the site","businessContext":"Concise facts about what the business does, offers, serves and any important policies visible on the site","botName":"Suggested assistant name","welcomeMessage":"Friendly tenant-specific welcome message","tone":"friendly","brandColour":"#hexcolor","allowedTopics":["Free-text topic 1","Free-text topic 2"],"quickActions":[{"label":"Short chip label","prompt":"Message to send when clicked"}],"securityLevel":"strict","knowledge":[{"title":"Knowledge title","content":"Accurate answer/fact from the site","keywords":["keyword1","keyword2"]}]}
 
-// Notes for the AI - CRITICAL:
-// 1. ACCURACY: Extract information DIRECTLY from the provided content. Do NOT invent or assume anything.
-// 2. INDUSTRY: Must be a real industry category (e.g., "Fashion & Apparel", "Footwear", "Electronics", "Beauty & Cosmetics"). NEVER guess "Health & Wellness" unless the site literally sells health products/supplements.
-// 3. PRODUCT BASED: If the site sells physical goods, use the product category as industry (e.g., shoes -> "Footwear", jewelry -> "Fashion & Accessories").
-// 4. BUSINESS CONTEXT: Base this ONLY on what the content says. Include shipping info, return policies, key products mentioned.
-// 5. BRAND_COLORS are colors from CSS custom properties like --primary, --brand, --accent, --cta (highest confidence)
-// 6. CSS_COLORS are all other hex colors found in stylesheets (lower confidence)
-// 7. ALWAYS choose the PRIMARY brand colour from BRAND_COLORS first - these are most reliable
-// 8. Look for colors associated with .primary, .btn, .button, .cta classes (brand context)
-// 9. The brand colour should be the main accent colour - the one used for buttons, links, and key CTAs
-// 10. NEVER choose neutral colours: black (#000000, #111111), white (#ffffff), greys (#333333, #888888), or near-whites
-// 11. If a site has a clear primary brand colour (e.g., #4c1d95 for purple, #0066cc for blue), use THAT
-// 12. For sites with green/yellow themes, use that distinctive brand colour
+Rules:
+1. Extract facts from the supplied website content only. Never invent services, products, policies or contact details.
+2. allowedTopics must be tenant-specific free-text concepts derived from what this business actually does. Do not use a platform/global topic taxonomy.
+3. quickActions must be 3-6 useful starter questions tailored to this tenant. Do not assume any industry unless supported by the site.
+4. businessContext should describe the business broadly enough for a semantic scope classifier to decide whether customer questions are relevant.
+5. Choose a real primary/accent brand colour from the supplied CSS/site evidence. Avoid neutral black/white/grey when a stronger brand colour is available.
+6. Keep securityLevel as strict unless the supplied content clearly warrants a different setting.`;
 
 interface AnalyzeWebsiteInput {
   url: string;
@@ -304,6 +318,7 @@ interface AnalyzeWebsiteOutput {
   tone?: string;
   brandColour?: string;
   allowedTopics?: string[];
+  quickActions?: Array<{ label: string; prompt: string }>;
   securityLevel?: string;
   knowledge?: Array<{ title: string; content: string; keywords?: string[] }>;
 }
@@ -682,6 +697,7 @@ async function handleAnalyzeWebsite(req: Request): Promise<Response> {
       tone: result.tone,
       brandColour: result.brandColour,
       allowedTopics: result.allowedTopics,
+      quickActions: result.quickActions,
       securityLevel: result.securityLevel,
       knowledge: result.knowledge,
     },

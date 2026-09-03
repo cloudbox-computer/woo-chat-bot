@@ -173,6 +173,7 @@ export class SupabaseDb implements Db {
       id: String(row.id),
       slug: String(row.slug),
       name: String(row.name),
+      industry: row.industry ? String(row.industry) : undefined,
       currency: String(row.currency ?? "GBP"),
       storeUrl: row.store_url ? String(row.store_url) : undefined,
       welcomeMessage: String(row.welcome_message ?? ""),
@@ -191,12 +192,15 @@ export class SupabaseDb implements Db {
                 : [],
               refusalMessage:
                 refusalMessage ??
-                `I'm sorry, I can only help with ${String(row.name)} products, orders, delivery, returns and other services provided by ${String(row.name)}.`,
+                `I'm sorry, I can only help with ${String(row.name)} and enquiries related to this business.`,
               securityLevel:
                 scope.securityLevel === "standard" || scope.securityLevel === "strict" || scope.securityLevel === "extra-strict"
                   ? scope.securityLevel
                   : "strict",
-              useModelClassifier: scope.useModelClassifier === true,
+              useModelClassifier:
+                typeof scope.useModelClassifier === "boolean"
+                  ? scope.useModelClassifier
+                  : undefined,
             }
           : undefined,
       supportEmail: row.support_email ? String(row.support_email) : undefined,
@@ -227,7 +231,7 @@ export class SupabaseDb implements Db {
     const bot = await this.getChatbot(chatbotId);
     if (!bot) return null;
     const rows = await this.get<Record<string, unknown>>("tenants", {
-      select: "id,slug,name,currency,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(credentials)",
+      select: "id,slug,name,industry,currency,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(credentials)",
       id: `eq.${bot.tenantId}`,
       limit: "1",
     });
@@ -236,7 +240,7 @@ export class SupabaseDb implements Db {
 
   async resolveChatbot(ref: string): Promise<Chatbot | null> {
     const rows = await this.get<Record<string, unknown>>("chatbots", {
-      select: "id,public_id,tenant_id,name,active",
+      select: "id,public_id,tenant_id,name,active,config",
       or: `(id.eq.${ref},public_id.eq.${ref})`,
       limit: "1",
     });
@@ -248,12 +252,13 @@ export class SupabaseDb implements Db {
       tenantId: String(bot.tenant_id),
       name: String(bot.name),
       active: true,
+      config: bot.config && typeof bot.config === "object" ? (bot.config as Record<string, unknown>) : {},
     };
   }
 
   async getChatbot(chatbotId: string): Promise<Chatbot | null> {
     const rows = await this.get<Record<string, unknown>>("chatbots", {
-      select: "id,public_id,tenant_id,name,active",
+      select: "id,public_id,tenant_id,name,active,config",
       id: `eq.${chatbotId}`,
       limit: "1",
     });
@@ -265,6 +270,7 @@ export class SupabaseDb implements Db {
       tenantId: String(bot.tenant_id),
       name: String(bot.name),
       active: true,
+      config: bot.config && typeof bot.config === "object" ? (bot.config as Record<string, unknown>) : {},
     };
   }
 

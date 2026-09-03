@@ -2,6 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Markdown } from "./Markdown";
 
+export interface QuickAction {
+  label: string;
+  prompt: string;
+}
+
 export interface WidgetConfig {
   chatbotId: string;
   apiUrl: string;
@@ -11,7 +16,7 @@ export interface WidgetConfig {
   assistantHeaderMessage?: string;
   /** First chat bubble shown when the conversation is empty (welcome message). */
   subtitle?: string;
-  quickActions?: string[];
+  quickActions?: QuickAction[];
   customerEmail?: string;
   /** GDPR: privacy-policy URL shown in the widget footer + consent line. */
   privacyUrl?: string;
@@ -171,9 +176,9 @@ export function Widget({ config }: { config: WidgetConfig }) {
   const brand = config.brandColour ?? COLORS.primary;
   const brandTextColor = getTextColorForBrand(brand);
   const title = config.title ?? "Chat with us";
-  const quickActions = config.quickActions?.length
-    ? config.quickActions
-    : ["Track my order", "Delivery times", "Returns", "Sizing help", "Product materials", "Gift ideas"];
+  // Starter chips are tenant configuration. No industry-specific defaults live
+  // in the widget bundle. Tenants with no configured actions simply show none.
+  const quickActions = config.quickActions ?? [];
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -478,8 +483,14 @@ export function Widget({ config }: { config: WidgetConfig }) {
           </div>
           {messages.length === 0 && (
             <div style={s.chips}>
-              {quickActions.map((qa) => (
-                <button key={qa} style={s.chip} onClick={() => send(qa)}>{qa}</button>
+              {quickActions.map((qa, index) => (
+                <button
+                  key={`${qa.label}-${index}`}
+                  style={s.chip}
+                  onClick={() => send(qa.prompt)}
+                >
+                  {qa.label}
+                </button>
               ))}
             </div>
           )}
@@ -555,7 +566,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
             <input
               style={s.input}
               value={input}
-              placeholder="Ask about products, orders, delivery…"
+              placeholder="Ask a question…"
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && send(input)}
             />

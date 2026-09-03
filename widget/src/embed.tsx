@@ -12,6 +12,7 @@ interface PublicWidgetConfig {
   brandColour?: string | null;
   storeUrl?: string | null;
   privacyPolicyUrl?: string | null;
+  quickActions?: Array<{ label: string; prompt: string }>;
 }
 
 function scriptElement(): HTMLScriptElement | null {
@@ -76,7 +77,12 @@ function init(script: HTMLScriptElement | null) {
         assistantHeaderMessage:
           data.assistantHeaderMessage ?? remote.assistantHeaderMessage ?? (remote.subtitle ?? undefined),
         subtitle: data.subtitle ?? remote.subtitle ?? remote.welcomeMessage ?? undefined,
-        quickActions: data.quickActions?.split("|").map((x) => x.trim()),
+        quickActions: data.quickActions
+          ? data.quickActions.split("|").map((x) => {
+              const text = x.trim();
+              return { label: text, prompt: text };
+            }).filter((x) => x.label)
+          : remote.quickActions ?? [],
         customerEmail: data.customerEmail,
         // GDPR: explicit data-privacy-url wins; else the tenant privacy policy
         // from widget-config; else a sensible default on the store site.

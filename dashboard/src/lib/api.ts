@@ -64,6 +64,8 @@ export interface OnboardingInput {
   tone?: string;
   brandColour?: string;
   allowedTopics?: string[];
+  quickActions?: Array<{ label: string; prompt: string }>;
+  refusalMessage?: string;
   securityLevel?: "standard" | "strict" | "extra-strict";
   knowledge?: OnboardingKnowledge[];
   integrations?: Array<{
@@ -98,6 +100,7 @@ export interface WebsiteAnalyzeData {
   tone?: string;
   brandColour?: string;
   allowedTopics?: string[];
+  quickActions?: Array<{ label: string; prompt: string }>;
   securityLevel?: string;
   knowledge?: Array<{ title: string; content: string; keywords?: string[] }>;
 }
@@ -129,6 +132,9 @@ export interface TenantConfig {
   assistantHeaderMessage: string | null;
   tone: string | null;
   businessContext: string | null;
+  allowedTopics: string[];
+  refusalMessage: string | null;
+  securityLevel: "standard" | "strict" | "extra-strict";
   defaultTicketPriority: string;
   autoTicketCategories: unknown;
   onboardingComplete: boolean;

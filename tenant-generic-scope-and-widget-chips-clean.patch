@@ -1,0 +1,1489 @@
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/dashboard/src/lib/api.ts b/dashboard/src/lib/api.ts
+--- a/dashboard/src/lib/api.ts	2026-09-03 01:09:26.000000000 +0000
++++ b/dashboard/src/lib/api.ts	2026-09-03 03:58:47.309535022 +0000
+@@ -64,6 +64,8 @@
+   tone?: string;
+   brandColour?: string;
+   allowedTopics?: string[];
++  quickActions?: Array<{ label: string; prompt: string }>;
++  refusalMessage?: string;
+   securityLevel?: "standard" | "strict" | "extra-strict";
+   knowledge?: OnboardingKnowledge[];
+   integrations?: Array<{
+@@ -98,6 +100,7 @@
+   tone?: string;
+   brandColour?: string;
+   allowedTopics?: string[];
++  quickActions?: Array<{ label: string; prompt: string }>;
+   securityLevel?: string;
+   knowledge?: Array<{ title: string; content: string; keywords?: string[] }>;
+ }
+@@ -129,6 +132,9 @@
+   assistantHeaderMessage: string | null;
+   tone: string | null;
+   businessContext: string | null;
++  allowedTopics: string[];
++  refusalMessage: string | null;
++  securityLevel: "standard" | "strict" | "extra-strict";
+   defaultTicketPriority: string;
+   autoTicketCategories: unknown;
+   onboardingComplete: boolean;
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/dashboard/src/pages/Chatbot.tsx b/dashboard/src/pages/Chatbot.tsx
+--- a/dashboard/src/pages/Chatbot.tsx	2026-09-03 01:09:26.000000000 +0000
++++ b/dashboard/src/pages/Chatbot.tsx	2026-09-03 03:59:53.017775398 +0000
+@@ -20,6 +20,10 @@
+   const [welcome, setWelcome] = React.useState("");
+   const [assistantHeader, setAssistantHeader] = React.useState("");
+   const [tone, setTone] = React.useState("");
++  const [allowedTopicsText, setAllowedTopicsText] = React.useState("");
++  const [refusalMessage, setRefusalMessage] = React.useState("");
++  const [quickActionsText, setQuickActionsText] = React.useState("");
++  const [securityLevel, setSecurityLevel] = React.useState<"standard" | "strict" | "extra-strict">("strict");
+   const [active, setActive] = React.useState(true);
+ 
+   React.useEffect(() => {
+@@ -37,8 +41,23 @@
+       setWelcome(data.tenant.welcomeMessage ?? "");
+       setAssistantHeader(data.tenant.assistantHeaderMessage ?? "");
+       setTone(data.tenant.tone ?? "");
++      setAllowedTopicsText((data.tenant.allowedTopics ?? []).join("\n"));
++      setRefusalMessage(data.tenant.refusalMessage ?? "");
++      setSecurityLevel(data.tenant.securityLevel ?? "strict");
++    }
++    if (data?.chatbots?.[0]) {
++      setActive(data.chatbots[0].active !== false);
++      const raw = data.chatbots[0].config?.quickActions;
++      const actions = Array.isArray(raw) ? raw : [];
++      setQuickActionsText(actions.map((item) => {
++        if (typeof item === "string") return item;
++        if (!item || typeof item !== "object") return "";
++        const row = item as Record<string, unknown>;
++        const label = typeof row.label === "string" ? row.label : "";
++        const prompt = typeof row.prompt === "string" ? row.prompt : label;
++        return label && prompt !== label ? `${label} | ${prompt}` : label;
++      }).filter(Boolean).join("\n"));
+     }
+-    if (data?.chatbots?.[0]) setActive(data.chatbots[0].active !== false);
+   }, [data]);
+ 
+   if (error) return <ErrorBox message={error} />;
+@@ -54,9 +73,18 @@
+         welcomeMessage: welcome,
+         assistantHeaderMessage: assistantHeader,
+         tone,
++        allowedTopics: allowedTopicsText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
++        refusalMessage,
++        securityLevel,
+       };
+       if (bot) {
+-        patch.chatbot = { ...(bot.config ?? {}), welcome, tone };
++        const quickActions = quickActionsText.split(/\r?\n/).map((line) => {
++          const [rawLabel, ...rest] = line.split("|");
++          const label = rawLabel.trim();
++          const prompt = rest.join("|").trim() || label;
++          return { label, prompt };
++        }).filter((x) => x.label).slice(0, 8);
++        patch.chatbot = { ...(bot.config ?? {}), welcome, tone, quickActions };
+       }
+       await updateConfig(tenantId, patch);
+       const fresh = await getConfig(tenantId);
+@@ -125,6 +153,34 @@
+           <Field label="Personality / tone">
+             <input type="text" value={tone} onChange={(e) => setTone(e.target.value)} placeholder="friendly, professional…" />
+           </Field>
++          <Field label="Allowed topics" hint="Tenant-specific free-text scope. One topic per line; there is no platform industry taxonomy.">
++            <textarea
++              value={allowedTopicsText}
++              onChange={(e) => setAllowedTopicsText(e.target.value)}
++              placeholder={"Primary service or product area\nAnother topic\nSupport or policy area"}
++            />
++          </Field>
++          <Field label="Out-of-scope reply" hint="Fixed reply used when a request is outside this tenant's configured scope.">
++            <textarea
++              value={refusalMessage}
++              onChange={(e) => setRefusalMessage(e.target.value)}
++              placeholder={`I'm sorry, I can only help with ${name || "this business"} and enquiries related to this business.`}
++            />
++          </Field>
++          <Field label="Scope strictness">
++            <select value={securityLevel} onChange={(e) => setSecurityLevel(e.target.value as typeof securityLevel)}>
++              <option value="standard">Standard</option>
++              <option value="strict">Strict</option>
++              <option value="extra-strict">Extra strict</option>
++            </select>
++          </Field>
++          <Field label="Widget starter chips" hint="One per line. Use Label | Prompt to send different text when clicked. Maximum 8.">
++            <textarea
++              value={quickActionsText}
++              onChange={(e) => setQuickActionsText(e.target.value)}
++              placeholder={"Ask about our services\nGet a quote | How can I get a quote?"}
++            />
++          </Field>
+           <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+             <button className="btn" disabled={busy} onClick={save}>Save changes</button>
+             <button className="btn secondary" disabled={busy} onClick={toggleActive}>
+@@ -143,7 +199,7 @@
+           </p>
+           <div className="codeblock">{data.embedScript}</div>
+           <p className="muted" style={{ marginTop: 12 }}>
+-            The widget loads your store's products, knowledge and policies automatically. The snippet uses an opaque public chatbot ID and does not expose your internal tenant name or Supabase project URL.
++            The widget loads this tenant's configured assistant settings, knowledge and permitted tools automatically. The snippet uses an opaque public chatbot ID and does not expose your internal tenant name or Supabase project URL.
+             No other configuration needed.
+           </p>
+         </Card>
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/dashboard/src/pages/Onboarding.tsx b/dashboard/src/pages/Onboarding.tsx
+--- a/dashboard/src/pages/Onboarding.tsx	2026-09-03 01:09:25.000000000 +0000
++++ b/dashboard/src/pages/Onboarding.tsx	2026-09-03 03:59:52.419492466 +0000
+@@ -17,20 +17,12 @@
+   "Install",
+ ];
+ 
+-const TOPICS = [
+-  { id: "products", label: "Products & catalogue" },
+-  { id: "orders", label: "Orders & shipping" },
+-  { id: "returns", label: "Returns & refunds" },
+-  { id: "support", label: "Support tickets" },
+-  { id: "hours", label: "Opening hours" },
+-  { id: "policies", label: "Store policies" },
+-];
+ 
+ const TONES = ["friendly", "professional", "playful", "helpful", "calm", "luxury"];
+ const SECURITY_LEVELS: Array<{ id: OnboardingInput["securityLevel"]; label: string; desc: string }> = [
+   { id: "standard", label: "Standard", desc: "Answer most questions; refuse clearly off-topic ones." },
+   { id: "strict", label: "Strict", desc: "Only answer on-topic questions; flag anything ambiguous." },
+-  { id: "extra-strict", label: "Extra strict", desc: "Maximum guardrails — best for retail." },
++  { id: "extra-strict", label: "Extra strict", desc: "Maximum guardrails — ambiguous requests fail closed." },
+ ];
+ 
+ const PRIORITIES = ["low", "normal", "high", "urgent"];
+@@ -45,6 +37,8 @@
+   tone: string;
+   brandColour: string;
+   allowedTopics: string[];
++  quickActions: Array<{ label: string; prompt: string }>;
++  refusalMessage: string;
+   securityLevel: OnboardingInput["securityLevel"];
+   knowledge: Array<{ title: string; content: string }>;
+   wooUrl: string;
+@@ -67,7 +61,9 @@
+   welcomeMessage: "",
+   tone: "friendly",
+   brandColour: "#7c3aed",
+-  allowedTopics: ["products", "orders", "returns", "support"],
++  allowedTopics: [],
++  quickActions: [],
++  refusalMessage: "",
+   securityLevel: "strict",
+   knowledge: [],
+   wooUrl: "",
+@@ -98,13 +94,6 @@
+   const set = <K extends keyof WizardState>(key: K, value: WizardState[K]) =>
+     setState((s) => ({ ...s, [key]: value }));
+ 
+-  const toggleTopic = (id: string) =>
+-    setState((s) => ({
+-      ...s,
+-      allowedTopics: s.allowedTopics.includes(id)
+-        ? s.allowedTopics.filter((t) => t !== id)
+-        : [...s.allowedTopics, id],
+-    }));
+ 
+   const addKnowledge = () =>
+     setState((s) => ({ ...s, knowledge: [...s.knowledge, { title: "", content: "" }] }));
+@@ -144,6 +133,8 @@
+         tone: state.tone,
+         brandColour: state.brandColour,
+         allowedTopics: state.allowedTopics,
++        quickActions: state.quickActions,
++        refusalMessage: state.refusalMessage || undefined,
+         securityLevel: state.securityLevel,
+         knowledge: state.knowledge.filter((k) => k.title.trim() && k.content.trim()).map((k) => ({
+           title: k.title.trim(),
+@@ -209,6 +200,7 @@
+       if (data.tone && TONES.includes(data.tone)) set("tone", data.tone);
+       if (data.brandColour) set("brandColour", data.brandColour);
+       if (data.allowedTopics?.length) set("allowedTopics", data.allowedTopics);
++      if (data.quickActions?.length) set("quickActions", data.quickActions);
+       if (data.securityLevel === "standard" || data.securityLevel === "strict" || data.securityLevel === "extra-strict") {
+         set("securityLevel", data.securityLevel as WizardState["securityLevel"]);
+       }
+@@ -262,7 +254,7 @@
+                   type="url"
+                   value={state.website}
+                   onChange={(e) => set("website", e.target.value)}
+-                  placeholder="https://ivyandpearls.co.uk"
++                  placeholder="https://example.com"
+                   style={{ flex: 1 }}
+                 />
+                 <button
+@@ -278,18 +270,18 @@
+             </div>
+             <div className="field">
+               <label>Business name *</label>
+-              <input type="text" value={state.name} onChange={(e) => set("name", e.target.value)} placeholder="Ivy & Pearls" />
++              <input type="text" value={state.name} onChange={(e) => set("name", e.target.value)} placeholder="Your business name" />
+             </div>
+             <div className="field">
+               <label>Industry</label>
+-              <input type="text" value={state.industry} onChange={(e) => set("industry", e.target.value)} placeholder="Jewellery" />
++              <input type="text" value={state.industry} onChange={(e) => set("industry", e.target.value)} placeholder="Your industry" />
+             </div>
+             <div className="field">
+               <label>Anything the assistant should know?</label>
+               <textarea
+                 value={state.businessContext}
+                 onChange={(e) => set("businessContext", e.target.value)}
+-                placeholder="e.g. Handmade jewellery, shipping UK-wide, 30-day returns…"
++                placeholder="Describe what the business does, offers, who it serves, and important policies…"
+               />
+             </div>
+           </>
+@@ -312,6 +304,25 @@
+               />
+             </div>
+             <div className="field">
++              <label>Starter chips</label>
++              <div className="hint" style={{ marginBottom: 6 }}>
++                One per line. Use <code>Label | Prompt sent to assistant</code>. If you omit the prompt, the label is sent.
++              </div>
++              <textarea
++                value={state.quickActions.map((a) => a.label === a.prompt ? a.label : `${a.label} | ${a.prompt}`).join("\n")}
++                onChange={(e) => {
++                  const actions = e.target.value.split(/\r?\n/).map((line) => {
++                    const [rawLabel, ...rest] = line.split("|");
++                    const label = rawLabel.trim();
++                    const prompt = rest.join("|").trim() || label;
++                    return { label, prompt };
++                  }).filter((a) => a.label).slice(0, 8);
++                  set("quickActions", actions);
++                }}
++                placeholder={"Ask about our services\nGet a quote | How can I get a quote?"}
++              />
++            </div>
++            <div className="field">
+               <label>Personality</label>
+               <div className="chip-grid">
+                 {TONES.map((t) => (
+@@ -347,17 +358,25 @@
+             </p>
+             <div className="field">
+               <label>What can it talk about?</label>
+-              <div className="chip-grid">
+-                {TOPICS.map((t) => (
+-                  <button
+-                    key={t.id}
+-                    className={`chip-option ${state.allowedTopics.includes(t.id) ? "active" : ""}`}
+-                    onClick={() => toggleTopic(t.id)}
+-                  >
+-                    {t.label}
+-                  </button>
+-                ))}
++              <div className="hint" style={{ marginBottom: 6 }}>
++                Enter tenant-specific topics, one per line. These are free-text concepts, not platform categories.
+               </div>
++              <textarea
++                value={state.allowedTopics.join("\n")}
++                onChange={(e) => set(
++                  "allowedTopics",
++                  e.target.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 100),
++                )}
++                placeholder={"Primary service or product area\nAnother service\nPolicies or support area"}
++              />
++            </div>
++            <div className="field">
++              <label>Out-of-scope reply</label>
++              <textarea
++                value={state.refusalMessage}
++                onChange={(e) => set("refusalMessage", e.target.value)}
++                placeholder={`I'm sorry, I can only help with ${state.name || "this business"} and enquiries related to this business.`}
++              />
+             </div>
+             <div className="field">
+               <label>Strictness</label>
+@@ -409,7 +428,7 @@
+               <div style={{ fontWeight: 600, marginBottom: 8 }}>WooCommerce</div>
+               <div className="field">
+                 <label>Store URL</label>
+-                <input type="url" value={state.wooUrl} onChange={(e) => set("wooUrl", e.target.value)} placeholder="https://ivyandpearls.co.uk" />
++                <input type="url" value={state.wooUrl} onChange={(e) => set("wooUrl", e.target.value)} placeholder="https://example.com" />
+               </div>
+               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                 <div className="field">
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/supabase/functions/_shared/agent.ts b/supabase/functions/_shared/agent.ts
+--- a/supabase/functions/_shared/agent.ts	2026-09-03 01:09:26.000000000 +0000
++++ b/supabase/functions/_shared/agent.ts	2026-09-03 03:57:55.192148143 +0000
+@@ -17,13 +17,6 @@
+ 
+ export const MAX_TOOL_TURNS = 6;
+ 
+-// Questions about store policies / store info that are best answered from the
+-// tenant's own website (delivery, returns, care, size guide, FAQ, contact…).
+-// When a message matches, seedKnowledge also pulls the tenant's website so the
+-// model always has real, current data — deterministic and multi-tenant safe.
+-const STORE_INFO_QUERY_RE =
+-  /\b(delivery|deliveries|delivering|shipping|dispatch|postage|tracking|return|refund|exchange|cancel|care|cleaning|clean|tarnish|polish|size guide|sizing|warranty|guarantee|faq|contact|payment|terms|policy|how long|estimated arrival|delivered)\b/i;
+-
+ // convo5 — GDPR / account-gated flows.
+ //
+ // Deterministic intent classifiers that run AFTER the topic gate but BEFORE
+@@ -71,6 +64,45 @@
+   );
+ }
+ 
++
++async function classifyTenantScope(
++  provider: AiProvider,
++  cfg: ReturnType<typeof aiConfig>,
++  tenant: Tenant,
++  policy: TenantPolicy,
++  message: string,
++): Promise<boolean> {
++  const scopeParts = [
++    `Business: ${tenant.name}`,
++    tenant.industry ? `Industry: ${tenant.industry}` : "",
++    tenant.businessContext ? `Business context: ${tenant.businessContext}` : "",
++    policy.allowedTopics.length ? `Permitted topics: ${policy.allowedTopics.join("; ")}` : "",
++  ].filter(Boolean);
++
++  // No tenant scope data means there is nothing safe to classify against.
++  if (scopeParts.length <= 1) return false;
++
++  const result = await provider.chat({
++    model: cfg.provider === "gemini" ? cfg.geminiModel : cfg.openaiModel,
++    system: [
++      "You are a strict binary scope classifier for a multi-tenant customer assistant.",
++      "Decide whether the customer's message is reasonably related to the supplied business scope.",
++      "Use semantic meaning and ordinary synonyms, not exact keyword matching.",
++      "Do not answer the customer's question.",
++      "Return exactly ALLOW or DENY and nothing else.",
++      "ALLOW greetings, thanks, goodbyes and requests for help.",
++      "DENY requests unrelated to the business scope.",
++      "Tenant scope:",
++      ...scopeParts,
++    ].join("\n"),
++    history: [],
++    userMessage: message,
++    tools: [],
++  });
++
++  return /^ALLOW\b/i.test((result.content ?? "").trim());
++}
++
+ /**
+  * Agent loop for one chat message.
+  *
+@@ -98,14 +130,26 @@
+   const policy = buildPolicy(tenant);
+   const priorConversationId = req.conversationId ?? "";
+ 
++  // Provider is also used as a cheap semantic scope classifier for ambiguous
++  // tenant-specific messages. Business vocabulary remains tenant data.
++  const cfg = aiConfig();
++  const provider = providerFromConfig(cfg, { name: tenant.name, retail: false });
++
+   // Gate 2 — input safety / prompt injection (no AI call)
+   const input = checkInputSafety(req.message);
+   if (!input.allowed) {
+     return { reply: refusalReply(policy), products: [], conversationId: priorConversationId };
+   }
+ 
+-  // Gate 3 — topic gate / tenant-scope allowlist (no AI call)
+-  const topic = await checkTopicGate(req.message, policy);
++  // Gate 3 — tenant-configured scope. Fast lexical matching runs first; only
++  // ambiguous messages use semantic classification.
++  const topic = await checkTopicGate(
++    req.message,
++    policy,
++    policy.useModelClassifier
++      ? (message) => classifyTenantScope(provider, cfg, tenant, policy, message)
++      : undefined,
++  );
+   if (!topic.allowed) {
+     return { reply: refusalReply(policy), products: [], conversationId: priorConversationId };
+   }
+@@ -186,8 +230,6 @@
+     return { reply: emailRequestReply(tenant), products: [], conversationId };
+   }
+ 
+-  const cfg = aiConfig();
+-  const provider = providerFromConfig(cfg, { name: tenant.name, retail: tenant.kind !== "services" });
+   const system = buildSystemPrompt(tenant, policy);
+ 
+   // Flattened transcript: stored history first, then the new message last so
+@@ -353,14 +395,14 @@
+   return [
+     `You are the customer service assistant for ${name}.`,
+     "",
+-    `Your ONLY purpose is to assist customers with ${name} and the products, services, policies and information explicitly provided to you by the system.`,
++    `Your ONLY purpose is to assist customers with ${name} using the tenant scope, knowledge, connected tools and information explicitly supplied by the system.`,
+     "",
+     `You may help with these permitted topics: ${topics}.`,
+-    tenant.businessContext ? `About the store: ${tenant.businessContext}` : "",
++    tenant.businessContext ? `Business context: ${tenant.businessContext}` : "",
+     "",
+     "You MUST NOT answer questions outside this scope.",
+     "You MUST NOT provide general knowledge.",
+-    "You MUST NOT answer questions about other businesses, competitors, people, politics, news, technology, coding, mathematics, entertainment, current events or unrelated subjects.",
++    "You MUST NOT answer requests unrelated to this tenant's configured business scope.",
+     "You MUST NOT use your pretrained knowledge to answer questions outside the supplied tenant information.",
+     `If a question is outside your permitted scope, respond only with exactly this message: "${policy.refusalMessage}"`,
+     "",
+@@ -372,22 +414,22 @@
+     `Tone and style: ${tone}.`,
+     "",
+     "Tool rules:",
+-    "- ALWAYS use the provided tools for product, price, stock and order-status facts. Never invent prices, stock levels, product details or order statuses.",
+-    "- When a customer asks about a specific product's features (waterproof, material, care), call get_product or search_knowledge.",
+-    "- When a customer wants to track an order, call track_order. Never guess a status.",
+-    "- When search results contain products, present them with name and price, and mention availability.",
+-    "- For delivery times, returns policy, care & cleaning guides, size guide, FAQ or other store information not covered by the knowledge base, call search_website to look it up on the store's own website.",
+-    "- When the store's own website content has already been provided to you in the system message, answer the customer's store-information question DIRECTLY from that content. Never refuse a delivery, returns, care or FAQ question when that content is available — use it.",
+-    "- NEVER browse, link to, quote from or mention any website other than the store's own website.",
+-    "- Keep replies concise and in British English. Use £ for prices.",
+-    "- Format replies with Markdown where it improves readability: **bold** for key terms, bullet or numbered lists for steps/options/details, ## headings for longer answers, and tables for comparisons. Use plain sentences for short answers — don't over-format.",
+-    "- If a tool returns nothing, tell the customer honestly and offer alternatives.",
+-    "- When using knowledge or website content, cite the supplied source title or store page naturally at the end of the relevant statement; never invent a source.",
+-    "- Order cancellations, refunds and modifications are handled by the human support team — NEVER perform, promise or attempt them. Offer to raise a support ticket instead.",
++    "- Use connected tools when they are relevant and available. Never invent facts that should come from a connected system.",
++    "- Use search_knowledge for tenant-provided facts and guidance.",
++    "- Use search_website only for the tenant's own website. Never browse or cite unrelated websites.",
++    "- If a tool returns nothing, say so honestly rather than inventing an answer.",
++    "- Keep replies concise and in British English unless the tenant context clearly requires another style.",
++    "- Format replies with Markdown where it improves readability.",
++    tenant.wooUrl ? [
++      "Commerce tools are connected for this tenant:",
++      "- Use product/order/cart tools for live catalogue, price, stock, cart and order facts.",
++      "- Never invent prices, stock levels, product details or order statuses.",
++      "- Order cancellations, refunds and modifications are handled by the human support team unless an explicitly enabled tool permits the action.",
++    ].join("\n") : "",
+     "",
+     "Support tickets (create_ticket):",
+-    "- Raise a ticket ONLY for real problems that need human help: damaged item, missing order, wrong product, product defect, delivery/refund/payment/order problem, complaint, or an explicit request to speak to support.",
+-    "- Do NOT create a ticket for normal questions (product info, delivery times, return policy, prices, stock) — answer those normally.",
++    "- Raise a ticket only for a genuine issue that needs human help, a complaint, or an explicit request to speak to the tenant's team.",
++    "- Do not create a ticket for normal questions that can be answered from tenant knowledge or connected tools.",
+     "- Unless the customer has explicitly asked to create a ticket, ALWAYS confirm first: 'Would you like me to raise this with our support team?' and only call create_ticket after they say yes.",
+     "- You must collect: category, subject, description, and the customer's email address (ask for it if unknown). Name is optional.",
+     "- NEVER invent or pass a tenant ID, a recipient email address or a ticket reference — the system generates those automatically.",
+@@ -430,12 +472,10 @@
+     // ignore
+   }
+ 
+-  // 2) For store-policy / store-info questions, ALSO fetch the tenant's OWN
+-  // website via the search_website engine. This guarantees the model gets
+-  // real, current data for EVERY tenant (delivery, returns, care, size guide,
+-  // FAQ, contact…) without any per-tenant seeding. Deterministic — it does
+-  // not depend on the model deciding to call the tool.
+-  if (STORE_INFO_QUERY_RE.test(message)) {
++  // 2) Search the tenant's OWN website for the current question when a website
++  // is configured. This is intentionally industry-agnostic: the platform does
++  // not decide which topics "belong" to retail, accounting, legal, etc.
++  if (tenant.storeUrl) {
+     try {
+       const res = await searchTenantWebsite(tenant, { query: message }, { limit: 2 });
+       if (res.ok && res.text) {
+@@ -495,7 +535,7 @@
+   if (products.length) {
+     return `Here's what I found:\n${summarizeProducts(dedupeProducts(products).slice(0, 6), currency)}\n\nWould you like more details on any of these?`;
+   }
+-  return "I can help you find products, check an order, or answer questions about our jewellery. What would you like?";
++  return "How can I help with this business today?";
+ }
+ 
+ function dedupeProducts(products: Product[]): Product[] {
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/supabase/functions/_shared/db.ts b/supabase/functions/_shared/db.ts
+--- a/supabase/functions/_shared/db.ts	2026-09-03 01:09:26.000000000 +0000
++++ b/supabase/functions/_shared/db.ts	2026-09-03 03:57:05.572251985 +0000
+@@ -173,6 +173,7 @@
+       id: String(row.id),
+       slug: String(row.slug),
+       name: String(row.name),
++      industry: row.industry ? String(row.industry) : undefined,
+       currency: String(row.currency ?? "GBP"),
+       storeUrl: row.store_url ? String(row.store_url) : undefined,
+       welcomeMessage: String(row.welcome_message ?? ""),
+@@ -191,12 +192,15 @@
+                 : [],
+               refusalMessage:
+                 refusalMessage ??
+-                `I'm sorry, I can only help with ${String(row.name)} products, orders, delivery, returns and other services provided by ${String(row.name)}.`,
++                `I'm sorry, I can only help with ${String(row.name)} and enquiries related to this business.`,
+               securityLevel:
+                 scope.securityLevel === "standard" || scope.securityLevel === "strict" || scope.securityLevel === "extra-strict"
+                   ? scope.securityLevel
+                   : "strict",
+-              useModelClassifier: scope.useModelClassifier === true,
++              useModelClassifier:
++                typeof scope.useModelClassifier === "boolean"
++                  ? scope.useModelClassifier
++                  : undefined,
+             }
+           : undefined,
+       supportEmail: row.support_email ? String(row.support_email) : undefined,
+@@ -227,7 +231,7 @@
+     const bot = await this.getChatbot(chatbotId);
+     if (!bot) return null;
+     const rows = await this.get<Record<string, unknown>>("tenants", {
+-      select: "id,slug,name,currency,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(credentials)",
++      select: "id,slug,name,industry,currency,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(credentials)",
+       id: `eq.${bot.tenantId}`,
+       limit: "1",
+     });
+@@ -236,7 +240,7 @@
+ 
+   async resolveChatbot(ref: string): Promise<Chatbot | null> {
+     const rows = await this.get<Record<string, unknown>>("chatbots", {
+-      select: "id,public_id,tenant_id,name,active",
++      select: "id,public_id,tenant_id,name,active,config",
+       or: `(id.eq.${ref},public_id.eq.${ref})`,
+       limit: "1",
+     });
+@@ -248,12 +252,13 @@
+       tenantId: String(bot.tenant_id),
+       name: String(bot.name),
+       active: true,
++      config: bot.config && typeof bot.config === "object" ? (bot.config as Record<string, unknown>) : {},
+     };
+   }
+ 
+   async getChatbot(chatbotId: string): Promise<Chatbot | null> {
+     const rows = await this.get<Record<string, unknown>>("chatbots", {
+-      select: "id,public_id,tenant_id,name,active",
++      select: "id,public_id,tenant_id,name,active,config",
+       id: `eq.${chatbotId}`,
+       limit: "1",
+     });
+@@ -265,6 +270,7 @@
+       tenantId: String(bot.tenant_id),
+       name: String(bot.name),
+       active: true,
++      config: bot.config && typeof bot.config === "object" ? (bot.config as Record<string, unknown>) : {},
+     };
+   }
+ 
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/supabase/functions/_shared/policy.ts b/supabase/functions/_shared/policy.ts
+--- a/supabase/functions/_shared/policy.ts	2026-09-03 01:09:26.000000000 +0000
++++ b/supabase/functions/_shared/policy.ts	2026-09-03 04:02:28.380562776 +0000
+@@ -1,166 +1,19 @@
+-// Tenant Policy Engine — the strict-scope boundary for the whole platform.
++// Tenant Policy Engine — generic, tenant-configured scope boundary.
+ //
+-// The AI is never the authority on tenant boundaries; the application is.
+-// Every request passes through this policy engine BEFORE the LLM is contacted:
+-//
+-//   Gate 1  Tenant auth     (chatbotId resolved server-side -> tenant)
+-//   Gate 2  Input safety    (prompt-injection / jailbreak detection)
+-//   Gate 3  Topic gate      (tenant-scope ALLOWLIST, never a blocklist)
+-//   Gate 4  Main AI + tools (permission-filtered tool set, in agent.ts)
+-//   Gate 5  Output gate     (response validator)
+-//
+-// Gate 2/3/5 live here. Gate 1 is db.getChatbot/getTenantByChatbot (agent.ts).
+-// Gate 4 is the tool loop with permission filtering (agent.ts + tools.ts).
+-//
+-// "extra extra extra strict" behaviour:
+-//   - The topic gate uses an allowlist derived from the tenant's policy.
+-//   - Ambiguous messages FAIL CLOSED (rejected) unless a cheap classifier
+-//     says they're on-topic, or the tenant is deliberately "standard".
+-//   - Off-topic and injected requests get the tenant's FIXED refusal message,
+-//     never a free-form model reply, and never a wasted model call.
++// IMPORTANT: business topics are DATA, not application code. This module must
++// never contain retailer/accountant/legal/etc topic dictionaries. Each tenant
++// supplies its own scope via tenants.scope.allowedTopics + business_context.
++// The application only owns platform-wide safety controls.
+ 
+ import type { Tenant, TenantPolicy } from "./types.ts";
+ 
+ export interface GateResult {
+   allowed: boolean;
+-  reason?: "injection" | "off-topic" | "empty" | "leak" | "cross-tenant" | "ok";
++  reason?: "injection" | "off-topic" | "empty" | "leak" | "ok";
+ }
+ 
+-// ---------------------------------------------------------------------------
+-// Topic lexicon: topic name -> words/phrases that signal it.
+-// Topic names are keys a tenant may list in policy.allowedTopics.
+-// ---------------------------------------------------------------------------
+-
+-export const TOPIC_LEXICON: Record<string, string[]> = {
+-  // --- retail (jewellery / e-commerce) ---
+-  products: [
+-    "necklace", "necklaces", "pendant", "chain", "chains", "choker",
+-    "earring", "earrings", "hoop", "hoops", "stud", "studs",
+-    "bracelet", "bracelets", "bangle", "bangles",
+-    "ring", "rings", "signet", "gemstone", "gemstones",
+-    "jewellery", "jewelry", "jewel", "piece", "pieces",
+-    "product", "products", "item", "items", "catalogue", "collection",
+-    "in stock", "out of stock", "stock", "price", "prices",
+-  ],
+-  jewellery: [
+-    "gold", "silver", "rose gold", "white gold", "platinum",
+-    "pearl", "pearls", "diamond", "diamonds", "gemstone", "gemstones",
+-    "material", "materials", "metal", "plating", "plated",
+-    "14ct", "18ct", "9ct", "karat", "carat", "sterling",
+-  ],
+-  orders: [
+-    "order", "orders", "basket", "cart", "checkout",
+-    "place an order", "placed", "track my order", "where is my order",
+-    "dispatch", "shipped", "tracking",
+-  ],
+-  shipping: [
+-    "shipping", "delivery", "deliver", "delivery times", "delivery cost",
+-    "free delivery", "next day", "express", "how long", "scotland",
+-    "international delivery", "postcode", "uk delivery", "arrive",
+-  ],
+-  returns: [
+-    "return", "returns", "refund", "refunds", "exchange", "exchanges",
+-    "30 days", "return policy", "warranty", "send it back", "send back",
+-  ],
+-  payments: [
+-    "payment", "payments", "pay", "apple pay", "google pay", "paypal",
+-    "card", "credit card", "debit card", "stripe", "gift card", "voucher",
+-  ],
+-  sizing: [
+-    "size", "sizes", "sizing", "length", "fit", "fits", "ring size",
+-    "wrist", "measure", "measurements", "choker", "princess", "adjustable",
+-  ],
+-  jewellery_care: [
+-    "care", "clean", "cleaning", "cleaner", "polish", "tarnish",
+-    "waterproof", "water", "swimming", "shower", "showering",
+-    "hypoallergenic", "nickel", "sensitive skin", "maintenance", "storage", "lustre",
+-  ],
+-  gifts: [
+-    "gift", "gifts", "gift wrap", "gift wrapping", "gift box", "gift set",
+-    "anniversary", "birthday", "wedding", "bridal", "bridesmaid",
+-    "present", "valentine", "christmas", "mother's day", "father's day",
+-    "for my wife", "for my husband", "for my mum", "for my mum",
+-    "occasion", "special someone",
+-  ],
+-  store: [
+-    "ivy & pearls", "ivy and pearls", "your store", "your shop",
+-    "opening hours", "contact", "about you", "where are you based",
+-    "customer service", "support",
+-  ],
+-  // --- services (accountancy / professional) ---
+-  accounting: [
+-    "accountant", "accountants", "accounting", "accounts", "company accounts",
+-    "year end", "self assessment", "corporation tax", "ct600", "hmrc",
+-    "tax return", "tax returns", "tax planning", "capital allowances", "reliefs",
+-  ],
+-  bookkeeping: [
+-    "bookkeeping", "books", "xero", "quickbooks", "reconciliation", "ledger",
+-    "management accounts", "management reports", "receipts", "expenses", "cash flow",
+-  ],
+-  tax_services: [
+-    "tax", "vat", "mtd", "making tax digital", "vat return", "flat rate",
+-    "vat registration", "paye", "rti",
+-  ],
+-  payroll: [
+-    "payroll", "payslip", "payslips", "p60", "p45", "pension",
+-    "auto-enrolment", "ssp", "smp", "employees", "starter", "leaver",
+-  ],
+-  business_services: [
+-    "limited company", "incorporation", "incorporate", "companies house",
+-    "confirmation statement", "register", "registered", "sole trader", "contractor",
+-    "landlord", "freelancer", "startup", "business support", "quote", "quotes",
+-    "fees", "pricing", "how much", "cost", "contact", "email", "phone",
+-    "rochdale", "opening hours", "ntm associates", "ntm-associates",
+-  ],
+-};
+-
+-export const RETAIL_DEFAULT_TOPICS = [
+-  "products", "jewellery", "orders", "shipping", "returns",
+-  "payments", "sizing", "jewellery_care", "gifts", "store",
+-];
+-
+-export const SERVICES_DEFAULT_TOPICS = [
+-  "accounting", "bookkeeping", "tax_services", "payroll", "business_services",
+-];
+-
+-// ---------------------------------------------------------------------------
+-// Off-topic signals (pre-filter only — the allowlist is the authority).
+-// The blocklist exists purely so we can reject "obvious" unrelated messages
+-// cheaply without spending a classifier call. Do NOT add bare tokens that
+-// could appear in legit tenant copy (e.g. "apple"/"google" clash with
+-// Apple Pay / Google Pay; "policy" appears in "returns policy").
+-// ---------------------------------------------------------------------------
+-
+-export const OFF_TOPIC_PATTERNS: RegExp[] = [
+-  // politics / government / war
+-  /\b(politics|political|politician|election|vote|voting|government|prime minister|president|parliament|brexit|military|war|warfare)\b/i,
+-  // news / current events
+-  /\b(news|current events|headline|breaking news)\b/i,
+-  // weather
+-  /\b(weather|forecast|temperature|rainfall|snowfall)\b/i,
+-  // coding / software
+-  /\b(code|coding|programming|python|javascript|typescript|java|software|bug|debug|api|script|developer|algorithm|css|html|react|database|sql|computer|hacking|cyber)\b/i,
+-  // maths
+-  /\b(maths|math|mathematics|equation|algebra|calculus|trigonometry|geometry|integral|derivative)\b/i,
+-  // sports
+-  /\b(sports|sport|football|soccer|cricket|tennis|rugby|golf|hockey|world cup|premier league|olympics)\b/i,
+-  // entertainment
+-  /\b(movie|movies|film|films|song|songs|music|celebrity|actor|actress|netflix|spotify|video game|gaming)\b/i,
+-  // general knowledge / homework / lifestyle
+-  // (NOTE: "cooking"/"baking" are deliberately NOT here — they appear in
+-  // legitimate jewellery care advice, e.g. "remove your rings before cooking".
+-  // The topic allowlist still fails closed on truly off-topic requests.)
+-  /\b(capital of|history of|homework|essay|recipe|recipes|how to cook|travel tips|tourism|horoscope|astrology)\b/i,
+-  // famous people / other companies (avoid apple/google clash with Pay)
+-  /\b(elon|musk|bill gates|steve jobs|mark zuckerberg|donald trump|obama|trump|tesla|microsoft|amazon|netflix|facebook|whatsapp)\b/i,
+-  // meta / assistant-identity probes
+-  /\b(write me a|tell me a story|tell me a joke|write an essay|write a poem|meaning of life|are you human|who are you really)\b/i,
+-];
+-
+-// ---------------------------------------------------------------------------
+-// Prompt-injection / jailbreak patterns (Gate 2).
+-// ---------------------------------------------------------------------------
+-
++// Platform-level prompt-injection / jailbreak patterns. These protect every
++// tenant equally and are intentionally unrelated to any business vertical.
+ const INJECTION_PATTERNS: RegExp[] = [
+   /\b(ignore (all |any |your |the |previous |prior )*(instructions|prompts|rules|system)|ignore your)\b/i,
+   /\b(previous instructions|previous prompt|system prompt|system instructions|your instructions|the instructions)\b/i,
+@@ -175,119 +28,98 @@
+   /\b(prompt injection|play the role of|become a general|pretend to be a general)\b/i,
+ ];
+ 
+-// ---------------------------------------------------------------------------
+-// Opening / pleasantry detection — always allowed so a conversation can start.
+-// ---------------------------------------------------------------------------
+-
++// Generic conversational turns are not business topics and should never be
++// rejected by a tenant scope gate.
+ const OPENING_RE =
+-  /^(hi|hi there|hello|hello there|hey|yo|good (morning|afternoon|evening)|how are you|how'?s it going|thanks|thank you|thanks a lot|bye|goodbye|help|help me|i need help|what can you do|what can you help (me )?with|what do you do|what do you sell|what do you offer|how do you work|how does this work|start over|restart|are you there|who are you|what are you|welcome)\b/i;
++  /^(hi|hi there|hello|hello there|hey|yo|good (morning|afternoon|evening)|how are you|how'?s it going|thanks|thank you|thanks a lot|bye|goodbye|help|help me|i need help|what can you do|what can you help (me )?with|what do you do|what do you offer|how do you work|how does this work|start over|restart|are you there|who are you|what are you|welcome)\b/i;
+ 
+-function isOpening(m: string): boolean {
+-  return OPENING_RE.test(m.trim());
++function isOpening(message: string): boolean {
++  return OPENING_RE.test(message.trim());
+ }
+ 
+-// ---------------------------------------------------------------------------
+-// Policy construction
+-// ---------------------------------------------------------------------------
+-
+-export function buildPolicy(tenant: Tenant): TenantPolicy {
+-  const retail = tenant.kind !== "services";
+-  const p = tenant.policy;
+-  return {
+-    allowedTopics:
+-      p?.allowedTopics?.length
+-        ? p.allowedTopics
+-        : retail
+-          ? [...RETAIL_DEFAULT_TOPICS]
+-          : [...SERVICES_DEFAULT_TOPICS],
+-    refusalMessage:
+-      p?.refusalMessage ??
+-      `I'm sorry, I can only help with ${tenant.name} products, orders, delivery, returns and other services provided by ${tenant.name}.`,
+-    securityLevel: p?.securityLevel ?? (retail ? "extra-strict" : "strict"),
+-    useModelClassifier: p?.useModelClassifier ?? false,
+-  };
++const STOP_WORDS = new Set([
++  "the", "and", "for", "with", "from", "this", "that", "your", "you", "our",
++  "are", "can", "could", "would", "what", "when", "where", "how", "about", "into",
++  "have", "has", "had", "does", "do", "please", "help", "service", "services",
++  "business", "customer", "customers", "information", "enquiry", "enquiries",
++]);
++
++function normalise(value: string): string {
++  return value
++    .toLowerCase()
++    .normalize("NFKD")
++    .replace(/[^a-z0-9]+/g, " ")
++    .replace(/\s+/g, " ")
++    .trim();
++}
++
++function significantTokens(value: string): string[] {
++  return normalise(value)
++    .split(" ")
++    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+ }
+ 
++/**
++ * Fast tenant-specific lexical check.
++ *
++ * allowedTopics are free-text tenant concepts, not keys into a global lexicon.
++ * Values may describe any tenant-specific product, service, policy or support
++ * area — the engine does not know or care which industry they belong to.
++ */
+ export function hasOnTopicSignal(message: string, policy: TenantPolicy): boolean {
+-  const m = message.toLowerCase();
+-  for (const topic of policy.allowedTopics) {
+-    const words = TOPIC_LEXICON[topic];
+-    if (!words) continue;
+-    for (const w of words) {
+-      if (m.includes(w)) return true;
+-    }
+-  }
+-  return false;
+-}
++  const m = normalise(message);
++  if (!m) return false;
+ 
+-// ---------------------------------------------------------------------------
+-// Order-tracking / contact follow-up signals (Gate 3).
+-//
+-// Mid-flow a customer may reply with ONLY their order number and/or checkout
+-// email (e.g. "#314 amelia@example.com") without repeating any topic keyword.
+-// These are unambiguous order/contact signals and must stay in-scope, or the
+-// strict allowlist would refuse a legitimate order lookup. A bare number with
+-// no order marker or email still fails closed.
+-// ---------------------------------------------------------------------------
+-
+-const ORDER_MARKER_RE = /\b(order\s*#?\s*\d+|#\s*\d{2,})\b/i;
+-const EMAIL_RE = /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i;
+-
+-function hasOrderFollowUpSignal(m: string): boolean {
+-  return EMAIL_RE.test(m) || ORDER_MARKER_RE.test(m);
+-}
+-
+-// ---------------------------------------------------------------------------
+-// Support-ticket signals (convo2 — Gate 3).
+-//
+-// A customer describing a problem that needs human help (damaged item, missing
+-// order, wrong product, defect, complaint, explicit "speak to support" request)
+-// may not use a topic keyword the allowlist recognises. These messages must
+-// still pass the topic gate so the AI can offer create_ticket. The AI still
+-// confirms before raising a ticket — the gate only decides what reaches it.
+-// ---------------------------------------------------------------------------
+-
+-const TICKET_SIGNALS: RegExp[] = [
+-  /\b(damaged|damage|broken|broke|faulty|fault|defective|defect|malfunction|not working|stopped working)\b/i,
+-  /\b(missing|haven'?t received|never arrived|didn'?t arrive|not (been )?delivered)\b/i,
+-  /\b(wrong (item|product|order|size)|incorrect (item|product|order))\b/i,
+-  /\b(complaint|complain|complained)\b/i,
+-  /\b(speak to|talk to|contact|see|reach) (a |the )?(human|support|someone|person|agent|team)\b/i,
+-  /\b(refund (problem|issue)|refund not (received|arrived)|no refund)\b/i,
+-  // Bare "ticket"/"tickets" — asking about a support ticket is inherently
+-  // in-scope (convo5). Without this, "what's the status of my ticket?" fails
+-  // closed on the allowlist. Ownership is still verified by reference + email
+-  // inside check_ticket_status, so this only widens reach, not data access.
+-  /\b(ticket|tickets)\b/i,
+-];
++  const concepts = [
++    ...policy.allowedTopics,
++    ...(policy.scopeContext ? [policy.scopeContext] : []),
++  ].filter(Boolean);
++
++  for (const concept of concepts) {
++    const c = normalise(concept);
++    if (!c) continue;
++    if (m.includes(c) || c.includes(m)) return true;
++
++    const conceptTokens = significantTokens(c);
++    if (!conceptTokens.length) continue;
++    const messageTokens = new Set(significantTokens(m));
++    const matches = conceptTokens.filter((token) => messageTokens.has(token)).length;
++
++    // One distinctive token is enough for a short topic label (e.g. "Payroll").
++    // For longer descriptions require at least two token matches unless the
++    // concept itself is only one significant token.
++    if (conceptTokens.length === 1 && matches === 1) return true;
++    if (matches >= 2) return true;
++  }
+ 
+-function hasTicketSignal(m: string): boolean {
+-  return TICKET_SIGNALS.some((p) => p.test(m));
++  return false;
+ }
+ 
+-// ---------------------------------------------------------------------------
+-// GDPR / data-subject request signals (convo5 — Gate 3).
+-//
+-// A customer asking to see, correct or delete their personal data, or asking
+-// about privacy/GDPR, is a legitimate support topic. These messages must pass
+-// the topic gate so the assistant can explain their rights and offer a support
+-// ticket (erasure is human-processed, never automated).
+-// ---------------------------------------------------------------------------
+-
+-const GDPR_SIGNALS: RegExp[] = [
+-  /\b(delete|erase|remove|forget) (all |any )?(my |the )?(personal )?(data|information|details|records|info|account)\b|\bforget me\b/i,
+-  /\b(what data do you (have|hold|store) (on|about) me|access to my data|see my data)\b/i,
+-  /\b(gdpr|data protection|privacy policy|right to (access|erasure|be forgotten|rectification)|personal data)\b/i,
+-];
++export function buildPolicy(tenant: Tenant): TenantPolicy {
++  const configured = tenant.policy;
++  const allowedTopics = Array.isArray(configured?.allowedTopics)
++    ? configured!.allowedTopics.map((x) => String(x).trim()).filter(Boolean)
++    : [];
++
++  const scopeContext = [
++    tenant.industry ? `Industry: ${tenant.industry}` : "",
++    tenant.businessContext ? `Business: ${tenant.businessContext}` : "",
++  ].filter(Boolean).join("\n");
+ 
+-function hasGdprSignal(m: string): boolean {
+-  return GDPR_SIGNALS.some((p) => p.test(m));
++  return {
++    allowedTopics,
++    scopeContext,
++    refusalMessage:
++      configured?.refusalMessage?.trim() ||
++      `I'm sorry, I can only help with ${tenant.name} and enquiries related to this business.`,
++    securityLevel: configured?.securityLevel ?? "strict",
++    // Strict tenants should use semantic classification for messages that do
++    // not have an obvious lexical match. This keeps scope safe without baking
++    // any tenant's vocabulary into source code.
++    useModelClassifier: configured?.useModelClassifier ?? true,
++  };
+ }
+ 
+-// ---------------------------------------------------------------------------
+-// Gate 2 — Input safety / prompt injection
+-// ---------------------------------------------------------------------------
+-
+ export function checkInputSafety(message: string): GateResult {
+   const m = message.trim();
+   if (!m) return { allowed: false, reason: "empty" };
+@@ -297,122 +129,58 @@
+   return { allowed: true, reason: "ok" };
+ }
+ 
+-// ---------------------------------------------------------------------------
+-// Gate 3 — Topic gate (tenant-scope allowlist)
+-// ---------------------------------------------------------------------------
+-
+ /**
+- * Deterministic allowlist gate. `classify` is an optional cheap classifier
+- * used only for ambiguous messages when policy.useModelClassifier is set.
++ * Tenant scope gate.
++ *
++ * 1. Generic conversation is allowed.
++ * 2. Fast match against tenant-owned scope data.
++ * 3. Ambiguous messages are semantically classified against tenant-owned
++ *    scope data when configured.
++ * 4. Strict modes fail closed if classification is unavailable/negative.
+  */
+ export async function checkTopicGate(
+   message: string,
+   policy: TenantPolicy,
+   classify?: (msg: string) => Promise<boolean>,
+ ): Promise<GateResult> {
+-  const m = message.trim().toLowerCase();
++  const m = message.trim();
+   if (!m) return { allowed: false, reason: "empty" };
+ 
+   if (isOpening(m)) return { allowed: true, reason: "ok" };
+-
+   if (hasOnTopicSignal(m, policy)) return { allowed: true, reason: "ok" };
+ 
+-  // Obvious off-topic → reject without spending a model call.
+-  if (OFF_TOPIC_PATTERNS.some((p) => p.test(m))) {
+-    return { allowed: false, reason: "off-topic" };
++  if (policy.useModelClassifier && classify) {
++    try {
++      if (await classify(message)) return { allowed: true, reason: "ok" };
++    } catch {
++      // Strict modes deliberately fail closed on classifier failure.
++    }
+   }
+ 
+-  // Order-tracking / contact follow-up ("#314 amelia@example.com", "314",
+-  // "amelia@example.com") — no topic keyword repeated, but clearly order scope.
+-  if (hasOrderFollowUpSignal(m)) return { allowed: true, reason: "ok" };
+-
+-  // Support-ticket signals ("my necklace arrived damaged", "I need to speak
+-  // to support") — in-scope; the AI may offer create_ticket for these.
+-  if (hasTicketSignal(m)) return { allowed: true, reason: "ok" };
+-
+-  // GDPR / data-subject requests ("delete my data", "what is your privacy
+-  // policy?") — in-scope; the assistant explains rights and offers a ticket.
+-  if (hasGdprSignal(m)) return { allowed: true, reason: "ok" };
+-
+-  // Ambiguous. Fail closed unless a cheap classifier approves it.
+-  if (policy.securityLevel !== "standard") {
+-    if (policy.useModelClassifier && classify) {
+-      try {
+-        if (await classify(message)) return { allowed: true, reason: "ok" };
+-      } catch {
+-        // classifier failure → stay closed
+-      }
+-    }
+-    return { allowed: false, reason: "off-topic" };
++  if (policy.securityLevel === "standard") {
++    return { allowed: true, reason: "ok" };
+   }
+-  return { allowed: true, reason: "ok" };
+-}
+ 
+-// ---------------------------------------------------------------------------
+-// Gate 5 — Output gate (response validator)
+-// ---------------------------------------------------------------------------
++  return { allowed: false, reason: "off-topic" };
++}
+ 
++// Platform-wide leak detector. It contains no tenant or industry names.
+ const LEAK_RE =
+   /\b(system prompt|system instructions|internal configuration|internal config|api ?key|access token|secret|credentials|tenant id|service role|bearer)\b/i;
+ 
+-/** Other tenants the model must never mention in another tenant's reply. */
+-const OTHER_TENANT_NAMES = ["ntm associates", "ntm-associates", "ivy & pearls", "ivy and pearls"];
+-
+-/**
+- * Gate 5 — output gate (response validator).
+- *
+- * productNames: names of products the agent actually retrieved from the
+- * tenant's own catalogue via tools. When the reply references one of them,
+- * the fuzzy OFF_TOPIC heuristic is skipped, because a legitimate product
+- * name can legitimately contain an off-topic keyword (e.g. a "Tennis
+- * Bracelet" colliding with the sports keyword). Leak and cross-tenant
+- * checks above remain absolute and always apply.
+- */
+ export function checkOutputGate(
+   reply: string,
+-  tenant: Tenant,
+-  policy: TenantPolicy,
+-  productNames: string[] = [],
+-  opts?: { authoritativeContext?: boolean },
++  _tenant: Tenant,
++  _policy: TenantPolicy,
++  _productNames: string[] = [],
++  _opts?: { authoritativeContext?: boolean },
+ ): GateResult {
+   const r = reply.trim();
+   if (!r) return { allowed: false, reason: "empty" };
+-
+-  const low = r.toLowerCase();
+-
+-  if (LEAK_RE.test(low)) return { allowed: false, reason: "leak" };
+-
+-  const self = tenant.name.toLowerCase();
+-  for (const n of OTHER_TENANT_NAMES) {
+-    if (n !== self && low.includes(n)) return { allowed: false, reason: "cross-tenant" };
+-  }
+-
+-  const mentionsOwnProduct = productNames.some((name) => {
+-    const n = (name ?? "").toLowerCase();
+-    if (!n) return false;
+-    if (low.includes(n)) return true;
+-    // Fall back to any distinctive (>=5 char) word in the product name, so we
+-    // still catch replies that paraphrase or partially quote the name.
+-    const words = n.split(/[^a-z0-9]+/).filter((w) => w.length >= 5);
+-    return words.some((w) => low.includes(w));
+-  });
+-
+-  // If the model produced an obviously off-topic reply (went off the rails),
+-  // discard it and fall back to the fixed refusal.
+-  // SKIP when authoritativeContext is true — the model's knowledge came from
+-  // the store's own website, so off-topic tokens from that seeded text are
+-  // legitimate (e.g. "weather" appearing in a delivery page is fine).
+-  if (!opts?.authoritativeContext && !mentionsOwnProduct && OFF_TOPIC_PATTERNS.some((p) => p.test(r))) {
+-    return { allowed: false, reason: "off-topic" };
+-  }
+-
++  if (LEAK_RE.test(r)) return { allowed: false, reason: "leak" };
+   return { allowed: true, reason: "ok" };
+ }
+ 
+-// ---------------------------------------------------------------------------
+-// Fixed refusal response (§10) — the ONLY thing an out-of-scope customer sees.
+-// ---------------------------------------------------------------------------
+-
+ export function refusalReply(policy: TenantPolicy): string {
+   return policy.refusalMessage;
+ }
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/supabase/functions/_shared/types.ts b/supabase/functions/_shared/types.ts
+--- a/supabase/functions/_shared/types.ts	2026-09-03 01:09:26.000000000 +0000
++++ b/supabase/functions/_shared/types.ts	2026-09-03 03:56:51.645985811 +0000
+@@ -13,9 +13,11 @@
+  *   Gate 5  Output gate        (response validator)
+  */
+ export interface TenantPolicy {
+-  /** Allowlist of topics this tenant's chatbot may discuss. Keys into the
+-   *  topic lexicon (see _shared/policy.ts). Everything else is rejected. */
++  /** Tenant-owned free-text scope concepts. These are DATA, not keys into a
++   * global industry lexicon. */
+   allowedTopics: string[];
++  /** Additional tenant-owned context used by the semantic scope classifier. */
++  scopeContext?: string;
+   /** Fixed refusal response returned when a request fails a gate (§10).
+    *  The model is told to use exactly this when asked out of scope. */
+   refusalMessage: string;
+@@ -29,8 +31,10 @@
+ export interface Tenant {
+   id: string;
+   slug: string;
+-  name: string; // business name, e.g. "Ivy & Pearls"
+-  kind?: "retail" | "services"; // retail: product catalogue; services: knowledge-led
++  name: string;
++  /** Optional tenant-provided industry label; never used for hard-coded branching. */
++  industry?: string;
++  kind?: "retail" | "services"; // legacy compatibility only; scope is tenant-configured
+   storeUrl?: string;
+   currency: string;
+   welcomeMessage: string;
+@@ -83,6 +87,8 @@
+   tenantId: string;
+   name: string;
+   active: boolean;
++  /** Public-safe presentation settings are selectively exposed by widget-config. */
++  config?: Record<string, unknown>;
+   // Which tool permission levels this chatbot may use.
+   // Default: read + customer actions. Admin/sensitive are added per business.
+   permissions?: ToolPermission[];
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/supabase/functions/dashboard/index.ts b/supabase/functions/dashboard/index.ts
+--- a/supabase/functions/dashboard/index.ts	2026-09-03 01:49:09.000000000 +0000
++++ b/supabase/functions/dashboard/index.ts	2026-09-03 04:01:59.930019092 +0000
+@@ -268,6 +268,13 @@
+   });
+   const tenant = rows[0];
+   if (!tenant) throw new DashboardError("Tenant not found", 404);
++  const tenantScope =
++    tenant.scope && typeof tenant.scope === "object"
++      ? (tenant.scope as Record<string, unknown>)
++      : {};
++  const tenantAllowedTopics = Array.isArray(tenantScope.allowedTopics)
++    ? tenantScope.allowedTopics.map((topic) => String(topic)).filter(Boolean)
++    : [];
+ 
+   const botRows = await getRows(c, "chatbots", {
+     select: "id,public_id,name,active,config",
+@@ -288,6 +295,12 @@
+       assistantHeaderMessage: tenant.assistant_header_message ?? null,
+       tone: tenant.tone ?? null,
+       businessContext: tenant.business_context ?? null,
++      allowedTopics: tenantAllowedTopics,
++      refusalMessage: tenant.refusal_message ?? null,
++      securityLevel:
++        tenantScope.securityLevel === "standard" || tenantScope.securityLevel === "extra-strict"
++          ? tenantScope.securityLevel
++          : "strict",
+       defaultTicketPriority: tenant.default_ticket_priority ?? "normal",
+       autoTicketCategories: tenant.auto_ticket_categories ?? [],
+       onboardingComplete: tenant.onboarding_complete === true,
+@@ -351,6 +364,43 @@
+     patch.brand_colour = colour ? (colour.startsWith("#") ? colour : `#${colour}`) : null;
+   }
+ 
++  if ("refusalMessage" in body) {
++    patch.refusal_message = str(body.refusalMessage) || null;
++  }
++
++  if ("allowedTopics" in body || "securityLevel" in body) {
++    const currentRows = await getRows(c, "tenants", {
++      select: "scope",
++      id: `eq.${ctx.tenantId}`,
++      limit: "1",
++    });
++    const currentScope =
++      currentRows[0]?.scope && typeof currentRows[0].scope === "object"
++        ? { ...(currentRows[0].scope as Record<string, unknown>) }
++        : {};
++
++    if ("allowedTopics" in body) {
++      if (!Array.isArray(body.allowedTopics)) throw new DashboardError("allowedTopics must be an array");
++      currentScope.allowedTopics = body.allowedTopics
++        .map((topic) => String(topic).trim())
++        .filter(Boolean)
++        .slice(0, 100);
++    }
++
++    if ("securityLevel" in body) {
++      const security = str(body.securityLevel);
++      if (!security || !["standard", "strict", "extra-strict"].includes(security)) {
++        throw new DashboardError("Invalid security level");
++      }
++      currentScope.securityLevel = security;
++    }
++
++    // Free-text scope is evaluated semantically; keep this enabled unless a
++    // future tenant setting explicitly exposes an opt-out.
++    currentScope.useModelClassifier = true;
++    patch.scope = currentScope;
++  }
++
+   if (Object.keys(patch).length) {
+     await write(c, "PATCH", `tenants?id=eq.${ctx.tenantId}`, patch);
+   }
+@@ -376,6 +426,19 @@
+         if (typeof cb.welcome === "string") cfg.welcome = cb.welcome;
+         if (typeof cb.tone === "string") cfg.tone = cb.tone;
+         if ("avatar_url" in cb) cfg.avatar_url = cb.avatar_url;
++        if (Array.isArray(cb.quickActions)) {
++          cfg.quickActions = cb.quickActions.slice(0, 8).map((item) => {
++            if (typeof item === "string") {
++              const text = item.trim();
++              return text ? { label: text, prompt: text } : null;
++            }
++            if (!item || typeof item !== "object") return null;
++            const row = item as Record<string, unknown>;
++            const label = typeof row.label === "string" ? row.label.trim() : "";
++            const prompt = typeof row.prompt === "string" ? row.prompt.trim() : label;
++            return label ? { label, prompt: prompt || label } : null;
++          }).filter(Boolean);
++        }
+         botPatch.config = cfg;
+       }
+       if (Object.keys(botPatch).length) {
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/supabase/functions/onboarding/index.ts b/supabase/functions/onboarding/index.ts
+--- a/supabase/functions/onboarding/index.ts	2026-09-03 01:09:26.000000000 +0000
++++ b/supabase/functions/onboarding/index.ts	2026-09-03 03:58:47.309386289 +0000
+@@ -46,6 +46,8 @@
+   tone?: string;
+   brandColour?: string;
+   allowedTopics?: string[];
++  quickActions?: Array<{ label?: string; prompt?: string } | string>;
++  refusalMessage?: string;
+   securityLevel?: "standard" | "strict" | "extra-strict";
+   knowledge?: WizardKnowledge[];
+   integrations?: WizardIntegration[];
+@@ -120,14 +122,19 @@
+     throw new DashboardError("Brand colour must be a hex value like #7c3aed");
+   }
+ 
++  const allowedTopics = Array.isArray(body.allowedTopics)
++    ? body.allowedTopics.map((topic) => String(topic).trim()).filter(Boolean).slice(0, 100)
++    : [];
+   const scope = {
+-    allowedTopics: Array.isArray(body.allowedTopics) ? body.allowedTopics : [],
++    allowedTopics,
+     securityLevel: ["standard", "strict", "extra-strict"].includes(body.securityLevel ?? "")
+       ? body.securityLevel
+       : "strict",
++    useModelClassifier: true,
+   };
+   const refusalMessage =
+-    `I'm sorry, I can only help with ${name} products, orders, delivery, returns and other services provided by ${name}.`;
++    (body.refusalMessage ?? "").trim() ||
++    `I'm sorry, I can only help with ${name} and enquiries related to this business.`;
+ 
+   // Keep onboarding_complete false until every required resource has been
+   // created. A partially failed wizard must remain resumable rather than being
+@@ -161,6 +168,18 @@
+ 
+   // --- chatbot ------------------------------------------------------------
+   const botName = (body.botName ?? "").trim() || name;
++  const quickActions = Array.isArray(body.quickActions)
++    ? body.quickActions.slice(0, 8).map((item) => {
++        if (typeof item === "string") {
++          const text = item.trim();
++          return text ? { label: text, prompt: text } : null;
++        }
++        if (!item || typeof item !== "object") return null;
++        const label = typeof item.label === "string" ? item.label.trim() : "";
++        const prompt = typeof item.prompt === "string" ? item.prompt.trim() : label;
++        return label ? { label, prompt: prompt || label } : null;
++      }).filter((item): item is { label: string; prompt: string } => item !== null)
++    : [];
+   const existingBotRes = await fetch(
+     `${base}/chatbots?tenant_id=eq.${encodeURIComponent(tenantId)}&select=id,public_id&order=created_at.asc&limit=1`,
+     { headers },
+@@ -180,6 +199,7 @@
+       welcome: (body.welcomeMessage ?? "").trim(),
+       tone: (body.tone ?? "friendly").trim(),
+       avatar_url: null,
++      quickActions,
+     },
+   };
+   const resBot = await fetch(
+@@ -272,24 +292,18 @@
+ // Analyze website handler
+ // ---------------------------------------------------------------------------
+ 
+-const ANALYZE_SYSTEM_PROMPT = `You are an expert at analyzing e-commerce websites and extracting business information for chatbot onboarding.
++const ANALYZE_SYSTEM_PROMPT = `You analyze any kind of business website for chatbot onboarding.
+ 
+-Given a website's structured content, extract accurate business information and return ONLY valid JSON (no markdown, no explanation, no code blocks) with this exact shape:
+-{"name":"Business name","industry":"Industry name","businessContext":"Key business details like shipping, returns, products","botName":"Suggested assistant name","welcomeMessage":"A friendly welcome message for customers","tone":"friendly","brandColour":"#hexcolor","allowedTopics":["products","orders","returns","support"],"securityLevel":"strict","knowledge":[{"title":"FAQ Title","content":"Answer content","keywords":["keyword1","keyword2"]}]}`;
++Return ONLY valid JSON (no markdown or explanation) with this exact shape:
++{"name":"Business name","industry":"Industry/category stated or clearly evidenced by the site","businessContext":"Concise facts about what the business does, offers, serves and any important policies visible on the site","botName":"Suggested assistant name","welcomeMessage":"Friendly tenant-specific welcome message","tone":"friendly","brandColour":"#hexcolor","allowedTopics":["Free-text topic 1","Free-text topic 2"],"quickActions":[{"label":"Short chip label","prompt":"Message to send when clicked"}],"securityLevel":"strict","knowledge":[{"title":"Knowledge title","content":"Accurate answer/fact from the site","keywords":["keyword1","keyword2"]}]}
+ 
+-// Notes for the AI - CRITICAL:
+-// 1. ACCURACY: Extract information DIRECTLY from the provided content. Do NOT invent or assume anything.
+-// 2. INDUSTRY: Must be a real industry category (e.g., "Fashion & Apparel", "Footwear", "Electronics", "Beauty & Cosmetics"). NEVER guess "Health & Wellness" unless the site literally sells health products/supplements.
+-// 3. PRODUCT BASED: If the site sells physical goods, use the product category as industry (e.g., shoes -> "Footwear", jewelry -> "Fashion & Accessories").
+-// 4. BUSINESS CONTEXT: Base this ONLY on what the content says. Include shipping info, return policies, key products mentioned.
+-// 5. BRAND_COLORS are colors from CSS custom properties like --primary, --brand, --accent, --cta (highest confidence)
+-// 6. CSS_COLORS are all other hex colors found in stylesheets (lower confidence)
+-// 7. ALWAYS choose the PRIMARY brand colour from BRAND_COLORS first - these are most reliable
+-// 8. Look for colors associated with .primary, .btn, .button, .cta classes (brand context)
+-// 9. The brand colour should be the main accent colour - the one used for buttons, links, and key CTAs
+-// 10. NEVER choose neutral colours: black (#000000, #111111), white (#ffffff), greys (#333333, #888888), or near-whites
+-// 11. If a site has a clear primary brand colour (e.g., #4c1d95 for purple, #0066cc for blue), use THAT
+-// 12. For sites with green/yellow themes, use that distinctive brand colour
++Rules:
++1. Extract facts from the supplied website content only. Never invent services, products, policies or contact details.
++2. allowedTopics must be tenant-specific free-text concepts derived from what this business actually does. Do not use a platform/global topic taxonomy.
++3. quickActions must be 3-6 useful starter questions tailored to this tenant. Do not assume any industry unless supported by the site.
++4. businessContext should describe the business broadly enough for a semantic scope classifier to decide whether customer questions are relevant.
++5. Choose a real primary/accent brand colour from the supplied CSS/site evidence. Avoid neutral black/white/grey when a stronger brand colour is available.
++6. Keep securityLevel as strict unless the supplied content clearly warrants a different setting.`;
+ 
+ interface AnalyzeWebsiteInput {
+   url: string;
+@@ -304,6 +318,7 @@
+   tone?: string;
+   brandColour?: string;
+   allowedTopics?: string[];
++  quickActions?: Array<{ label: string; prompt: string }>;
+   securityLevel?: string;
+   knowledge?: Array<{ title: string; content: string; keywords?: string[] }>;
+ }
+@@ -682,6 +697,7 @@
+       tone: result.tone,
+       brandColour: result.brandColour,
+       allowedTopics: result.allowedTopics,
++      quickActions: result.quickActions,
+       securityLevel: result.securityLevel,
+       knowledge: result.knowledge,
+     },
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/supabase/functions/widget-config/index.ts b/supabase/functions/widget-config/index.ts
+--- a/supabase/functions/widget-config/index.ts	2026-09-03 01:09:26.000000000 +0000
++++ b/supabase/functions/widget-config/index.ts	2026-09-03 03:59:19.287221961 +0000
+@@ -23,7 +23,7 @@
+ import { controlsForChatbot, originAllowed } from "../_shared/enterprise.ts";
+ 
+ function publicConfig(
+-  bot: { id: string; name: string },
++  bot: { id: string; name: string; config?: Record<string, unknown> },
+   tenant: {
+     name: string;
+     welcomeMessage?: string;
+@@ -33,6 +33,21 @@
+     privacyPolicyUrl?: string;
+   },
+ ) {
++  const rawQuickActions = bot.config?.quickActions;
++  const quickActions = Array.isArray(rawQuickActions)
++    ? rawQuickActions.slice(0, 8).map((item) => {
++        if (typeof item === "string") {
++          const text = item.trim();
++          return text ? { label: text, prompt: text } : null;
++        }
++        if (!item || typeof item !== "object") return null;
++        const row = item as Record<string, unknown>;
++        const label = typeof row.label === "string" ? row.label.trim() : "";
++        const prompt = typeof row.prompt === "string" ? row.prompt.trim() : label;
++        return label ? { label, prompt: prompt || label } : null;
++      }).filter(Boolean)
++    : [];
++
+   return {
+     chatbotId: bot.id,
+     active: true,
+@@ -46,6 +61,7 @@
+     storeUrl: tenant.storeUrl ?? null,
+     // GDPR: public privacy-policy URL so the widget can link to it.
+     privacyPolicyUrl: tenant.privacyPolicyUrl ?? null,
++    quickActions,
+   };
+ }
+ 
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/widget/src/api.ts b/widget/src/api.ts
+--- a/widget/src/api.ts	2026-09-03 01:09:25.000000000 +0000
++++ b/widget/src/api.ts	2026-09-03 03:59:19.884429655 +0000
+@@ -25,12 +25,6 @@
+   products?: Product[];
+ }
+ 
+-export const QUICK_ACTIONS: Array<{ label: string; prompt: string }> = [
+-  { label: "Track my order", prompt: "Where is my order #4821? My email is {email}" },
+-  { label: "Gold necklaces under £100", prompt: "Do you have any gold necklaces under £100?" },
+-  { label: "Returns policy", prompt: "What is your returns policy?" },
+-  { label: "Gift ideas", prompt: "I need a gift for my wife, budget £150" },
+-];
+ 
+ interface ChatResponse {
+   reply: string;
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/widget/src/demo.tsx b/widget/src/demo.tsx
+--- a/widget/src/demo.tsx	2026-09-03 01:09:25.000000000 +0000
++++ b/widget/src/demo.tsx	2026-09-03 04:02:28.380904045 +0000
+@@ -6,6 +6,6 @@
+   chatbotId: "ivy-pearls",
+   apiUrl: import.meta.env.VITE_API_URL ?? "http://localhost:54321/functions/v1",
+   brandColour: "#9c7b4f",
+-  title: "Ivy & Pearls",
+-  subtitle: "Hi! I can help you find jewellery, check an order, or recommend a gift. What are you looking for?",
++  title: "Example Business",
++  subtitle: "Hi! How can I help today?",
+ });
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/widget/src/embed.tsx b/widget/src/embed.tsx
+--- a/widget/src/embed.tsx	2026-09-03 01:09:25.000000000 +0000
++++ b/widget/src/embed.tsx	2026-09-03 03:59:19.884269095 +0000
+@@ -12,6 +12,7 @@
+   brandColour?: string | null;
+   storeUrl?: string | null;
+   privacyPolicyUrl?: string | null;
++  quickActions?: Array<{ label: string; prompt: string }>;
+ }
+ 
+ function scriptElement(): HTMLScriptElement | null {
+@@ -76,7 +77,12 @@
+         assistantHeaderMessage:
+           data.assistantHeaderMessage ?? remote.assistantHeaderMessage ?? (remote.subtitle ?? undefined),
+         subtitle: data.subtitle ?? remote.subtitle ?? remote.welcomeMessage ?? undefined,
+-        quickActions: data.quickActions?.split("|").map((x) => x.trim()),
++        quickActions: data.quickActions
++          ? data.quickActions.split("|").map((x) => {
++              const text = x.trim();
++              return { label: text, prompt: text };
++            }).filter((x) => x.label)
++          : remote.quickActions ?? [],
+         customerEmail: data.customerEmail,
+         // GDPR: explicit data-privacy-url wins; else the tenant privacy policy
+         // from widget-config; else a sensible default on the store site.
+diff -ruN '--exclude=node_modules' '--exclude=dist' a/widget/src/widget.tsx b/widget/src/widget.tsx
+--- a/widget/src/widget.tsx	2026-09-03 01:09:25.000000000 +0000
++++ b/widget/src/widget.tsx	2026-09-03 04:02:28.380827651 +0000
+@@ -2,6 +2,11 @@
+ import { createRoot } from "react-dom/client";
+ import { Markdown } from "./Markdown";
+ 
++export interface QuickAction {
++  label: string;
++  prompt: string;
++}
++
+ export interface WidgetConfig {
+   chatbotId: string;
+   apiUrl: string;
+@@ -11,7 +16,7 @@
+   assistantHeaderMessage?: string;
+   /** First chat bubble shown when the conversation is empty (welcome message). */
+   subtitle?: string;
+-  quickActions?: string[];
++  quickActions?: QuickAction[];
+   customerEmail?: string;
+   /** GDPR: privacy-policy URL shown in the widget footer + consent line. */
+   privacyUrl?: string;
+@@ -171,9 +176,9 @@
+   const brand = config.brandColour ?? COLORS.primary;
+   const brandTextColor = getTextColorForBrand(brand);
+   const title = config.title ?? "Chat with us";
+-  const quickActions = config.quickActions?.length
+-    ? config.quickActions
+-    : ["Track my order", "Delivery times", "Returns", "Sizing help", "Product materials", "Gift ideas"];
++  // Starter chips are tenant configuration. No industry-specific defaults live
++  // in the widget bundle. Tenants with no configured actions simply show none.
++  const quickActions = config.quickActions ?? [];
+ 
+   useEffect(() => {
+     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+@@ -478,8 +483,14 @@
+           </div>
+           {messages.length === 0 && (
+             <div style={s.chips}>
+-              {quickActions.map((qa) => (
+-                <button key={qa} style={s.chip} onClick={() => send(qa)}>{qa}</button>
++              {quickActions.map((qa, index) => (
++                <button
++                  key={`${qa.label}-${index}`}
++                  style={s.chip}
++                  onClick={() => send(qa.prompt)}
++                >
++                  {qa.label}
++                </button>
+               ))}
+             </div>
+           )}
+@@ -555,7 +566,7 @@
+             <input
+               style={s.input}
+               value={input}
+-              placeholder="Ask about products, orders, delivery…"
++              placeholder="Ask a question…"
+               onChange={(e) => setInput(e.target.value)}
+               onKeyDown={(e) => e.key === "Enter" && send(input)}
+             />

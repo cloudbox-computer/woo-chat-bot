@@ -25,12 +25,6 @@ export interface ChatMessage {
   products?: Product[];
 }
 
-export const QUICK_ACTIONS: Array<{ label: string; prompt: string }> = [
-  { label: "Track my order", prompt: "Where is my order #4821? My email is {email}" },
-  { label: "Gold necklaces under £100", prompt: "Do you have any gold necklaces under £100?" },
-  { label: "Returns policy", prompt: "What is your returns policy?" },
-  { label: "Gift ideas", prompt: "I need a gift for my wife, budget £150" },
-];
 
 interface ChatResponse {
   reply: string;

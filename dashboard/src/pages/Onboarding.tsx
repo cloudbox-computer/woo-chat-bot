@@ -17,20 +17,12 @@ const STEPS = [
   "Install",
 ];
 
-const TOPICS = [
-  { id: "products", label: "Products & catalogue" },
-  { id: "orders", label: "Orders & shipping" },
-  { id: "returns", label: "Returns & refunds" },
-  { id: "support", label: "Support tickets" },
-  { id: "hours", label: "Opening hours" },
-  { id: "policies", label: "Store policies" },
-];
 
 const TONES = ["friendly", "professional", "playful", "helpful", "calm", "luxury"];
 const SECURITY_LEVELS: Array<{ id: OnboardingInput["securityLevel"]; label: string; desc: string }> = [
   { id: "standard", label: "Standard", desc: "Answer most questions; refuse clearly off-topic ones." },
   { id: "strict", label: "Strict", desc: "Only answer on-topic questions; flag anything ambiguous." },
-  { id: "extra-strict", label: "Extra strict", desc: "Maximum guardrails — best for retail." },
+  { id: "extra-strict", label: "Extra strict", desc: "Maximum guardrails — ambiguous requests fail closed." },
 ];
 
 const PRIORITIES = ["low", "normal", "high", "urgent"];
@@ -45,6 +37,8 @@ interface WizardState {
   tone: string;
   brandColour: string;
   allowedTopics: string[];
+  quickActions: Array<{ label: string; prompt: string }>;
+  refusalMessage: string;
   securityLevel: OnboardingInput["securityLevel"];
   knowledge: Array<{ title: string; content: string }>;
   wooUrl: string;
@@ -67,7 +61,9 @@ const initial: WizardState = {
   welcomeMessage: "",
   tone: "friendly",
   brandColour: "#7c3aed",
-  allowedTopics: ["products", "orders", "returns", "support"],
+  allowedTopics: [],
+  quickActions: [],
+  refusalMessage: "",
   securityLevel: "strict",
   knowledge: [],
   wooUrl: "",
@@ -98,13 +94,6 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
   const set = <K extends keyof WizardState>(key: K, value: WizardState[K]) =>
     setState((s) => ({ ...s, [key]: value }));
 
-  const toggleTopic = (id: string) =>
-    setState((s) => ({
-      ...s,
-      allowedTopics: s.allowedTopics.includes(id)
-        ? s.allowedTopics.filter((t) => t !== id)
-        : [...s.allowedTopics, id],
-    }));
 
   const addKnowledge = () =>
     setState((s) => ({ ...s, knowledge: [...s.knowledge, { title: "", content: "" }] }));
@@ -144,6 +133,8 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
         tone: state.tone,
         brandColour: state.brandColour,
         allowedTopics: state.allowedTopics,
+        quickActions: state.quickActions,
+        refusalMessage: state.refusalMessage || undefined,
         securityLevel: state.securityLevel,
         knowledge: state.knowledge.filter((k) => k.title.trim() && k.content.trim()).map((k) => ({
           title: k.title.trim(),
@@ -209,6 +200,7 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
       if (data.tone && TONES.includes(data.tone)) set("tone", data.tone);
       if (data.brandColour) set("brandColour", data.brandColour);
       if (data.allowedTopics?.length) set("allowedTopics", data.allowedTopics);
+      if (data.quickActions?.length) set("quickActions", data.quickActions);
       if (data.securityLevel === "standard" || data.securityLevel === "strict" || data.securityLevel === "extra-strict") {
         set("securityLevel", data.securityLevel as WizardState["securityLevel"]);
       }
@@ -262,7 +254,7 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
                   type="url"
                   value={state.website}
                   onChange={(e) => set("website", e.target.value)}
-                  placeholder="https://ivyandpearls.co.uk"
+                  placeholder="https://example.com"
                   style={{ flex: 1 }}
                 />
                 <button
@@ -278,18 +270,18 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
             </div>
             <div className="field">
               <label>Business name *</label>
-              <input type="text" value={state.name} onChange={(e) => set("name", e.target.value)} placeholder="Ivy & Pearls" />
+              <input type="text" value={state.name} onChange={(e) => set("name", e.target.value)} placeholder="Your business name" />
             </div>
             <div className="field">
               <label>Industry</label>
-              <input type="text" value={state.industry} onChange={(e) => set("industry", e.target.value)} placeholder="Jewellery" />
+              <input type="text" value={state.industry} onChange={(e) => set("industry", e.target.value)} placeholder="Your industry" />
             </div>
             <div className="field">
               <label>Anything the assistant should know?</label>
               <textarea
                 value={state.businessContext}
                 onChange={(e) => set("businessContext", e.target.value)}
-                placeholder="e.g. Handmade jewellery, shipping UK-wide, 30-day returns…"
+                placeholder="Describe what the business does, offers, who it serves, and important policies…"
               />
             </div>
           </>
@@ -309,6 +301,25 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
                 value={state.welcomeMessage}
                 onChange={(e) => set("welcomeMessage", e.target.value)}
                 placeholder={`Hi! Welcome to ${state.name || "our store"}. How can I help today?`}
+              />
+            </div>
+            <div className="field">
+              <label>Starter chips</label>
+              <div className="hint" style={{ marginBottom: 6 }}>
+                One per line. Use <code>Label | Prompt sent to assistant</code>. If you omit the prompt, the label is sent.
+              </div>
+              <textarea
+                value={state.quickActions.map((a) => a.label === a.prompt ? a.label : `${a.label} | ${a.prompt}`).join("\n")}
+                onChange={(e) => {
+                  const actions = e.target.value.split(/\r?\n/).map((line) => {
+                    const [rawLabel, ...rest] = line.split("|");
+                    const label = rawLabel.trim();
+                    const prompt = rest.join("|").trim() || label;
+                    return { label, prompt };
+                  }).filter((a) => a.label).slice(0, 8);
+                  set("quickActions", actions);
+                }}
+                placeholder={"Ask about our services\nGet a quote | How can I get a quote?"}
               />
             </div>
             <div className="field">
@@ -347,17 +358,25 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
             </p>
             <div className="field">
               <label>What can it talk about?</label>
-              <div className="chip-grid">
-                {TOPICS.map((t) => (
-                  <button
-                    key={t.id}
-                    className={`chip-option ${state.allowedTopics.includes(t.id) ? "active" : ""}`}
-                    onClick={() => toggleTopic(t.id)}
-                  >
-                    {t.label}
-                  </button>
-                ))}
+              <div className="hint" style={{ marginBottom: 6 }}>
+                Enter tenant-specific topics, one per line. These are free-text concepts, not platform categories.
               </div>
+              <textarea
+                value={state.allowedTopics.join("\n")}
+                onChange={(e) => set(
+                  "allowedTopics",
+                  e.target.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 100),
+                )}
+                placeholder={"Primary service or product area\nAnother service\nPolicies or support area"}
+              />
+            </div>
+            <div className="field">
+              <label>Out-of-scope reply</label>
+              <textarea
+                value={state.refusalMessage}
+                onChange={(e) => set("refusalMessage", e.target.value)}
+                placeholder={`I'm sorry, I can only help with ${state.name || "this business"} and enquiries related to this business.`}
+              />
             </div>
             <div className="field">
               <label>Strictness</label>
@@ -409,7 +428,7 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
               <div style={{ fontWeight: 600, marginBottom: 8 }}>WooCommerce</div>
               <div className="field">
                 <label>Store URL</label>
-                <input type="url" value={state.wooUrl} onChange={(e) => set("wooUrl", e.target.value)} placeholder="https://ivyandpearls.co.uk" />
+                <input type="url" value={state.wooUrl} onChange={(e) => set("wooUrl", e.target.value)} placeholder="https://example.com" />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div className="field">

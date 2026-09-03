@@ -1,166 +1,19 @@
-// Tenant Policy Engine — the strict-scope boundary for the whole platform.
+// Tenant Policy Engine — generic, tenant-configured scope boundary.
 //
-// The AI is never the authority on tenant boundaries; the application is.
-// Every request passes through this policy engine BEFORE the LLM is contacted:
-//
-//   Gate 1  Tenant auth     (chatbotId resolved server-side -> tenant)
-//   Gate 2  Input safety    (prompt-injection / jailbreak detection)
-//   Gate 3  Topic gate      (tenant-scope ALLOWLIST, never a blocklist)
-//   Gate 4  Main AI + tools (permission-filtered tool set, in agent.ts)
-//   Gate 5  Output gate     (response validator)
-//
-// Gate 2/3/5 live here. Gate 1 is db.getChatbot/getTenantByChatbot (agent.ts).
-// Gate 4 is the tool loop with permission filtering (agent.ts + tools.ts).
-//
-// "extra extra extra strict" behaviour:
-//   - The topic gate uses an allowlist derived from the tenant's policy.
-//   - Ambiguous messages FAIL CLOSED (rejected) unless a cheap classifier
-//     says they're on-topic, or the tenant is deliberately "standard".
-//   - Off-topic and injected requests get the tenant's FIXED refusal message,
-//     never a free-form model reply, and never a wasted model call.
+// IMPORTANT: business topics are DATA, not application code. This module must
+// never contain retailer/accountant/legal/etc topic dictionaries. Each tenant
+// supplies its own scope via tenants.scope.allowedTopics + business_context.
+// The application only owns platform-wide safety controls.
 
 import type { Tenant, TenantPolicy } from "./types.ts";
 
 export interface GateResult {
   allowed: boolean;
-  reason?: "injection" | "off-topic" | "empty" | "leak" | "cross-tenant" | "ok";
+  reason?: "injection" | "off-topic" | "empty" | "leak" | "ok";
 }
 
-// ---------------------------------------------------------------------------
-// Topic lexicon: topic name -> words/phrases that signal it.
-// Topic names are keys a tenant may list in policy.allowedTopics.
-// ---------------------------------------------------------------------------
-
-export const TOPIC_LEXICON: Record<string, string[]> = {
-  // --- retail (jewellery / e-commerce) ---
-  products: [
-    "necklace", "necklaces", "pendant", "chain", "chains", "choker",
-    "earring", "earrings", "hoop", "hoops", "stud", "studs",
-    "bracelet", "bracelets", "bangle", "bangles",
-    "ring", "rings", "signet", "gemstone", "gemstones",
-    "jewellery", "jewelry", "jewel", "piece", "pieces",
-    "product", "products", "item", "items", "catalogue", "collection",
-    "in stock", "out of stock", "stock", "price", "prices",
-  ],
-  jewellery: [
-    "gold", "silver", "rose gold", "white gold", "platinum",
-    "pearl", "pearls", "diamond", "diamonds", "gemstone", "gemstones",
-    "material", "materials", "metal", "plating", "plated",
-    "14ct", "18ct", "9ct", "karat", "carat", "sterling",
-  ],
-  orders: [
-    "order", "orders", "basket", "cart", "checkout",
-    "place an order", "placed", "track my order", "where is my order",
-    "dispatch", "shipped", "tracking",
-  ],
-  shipping: [
-    "shipping", "delivery", "deliver", "delivery times", "delivery cost",
-    "free delivery", "next day", "express", "how long", "scotland",
-    "international delivery", "postcode", "uk delivery", "arrive",
-  ],
-  returns: [
-    "return", "returns", "refund", "refunds", "exchange", "exchanges",
-    "30 days", "return policy", "warranty", "send it back", "send back",
-  ],
-  payments: [
-    "payment", "payments", "pay", "apple pay", "google pay", "paypal",
-    "card", "credit card", "debit card", "stripe", "gift card", "voucher",
-  ],
-  sizing: [
-    "size", "sizes", "sizing", "length", "fit", "fits", "ring size",
-    "wrist", "measure", "measurements", "choker", "princess", "adjustable",
-  ],
-  jewellery_care: [
-    "care", "clean", "cleaning", "cleaner", "polish", "tarnish",
-    "waterproof", "water", "swimming", "shower", "showering",
-    "hypoallergenic", "nickel", "sensitive skin", "maintenance", "storage", "lustre",
-  ],
-  gifts: [
-    "gift", "gifts", "gift wrap", "gift wrapping", "gift box", "gift set",
-    "anniversary", "birthday", "wedding", "bridal", "bridesmaid",
-    "present", "valentine", "christmas", "mother's day", "father's day",
-    "for my wife", "for my husband", "for my mum", "for my mum",
-    "occasion", "special someone",
-  ],
-  store: [
-    "ivy & pearls", "ivy and pearls", "your store", "your shop",
-    "opening hours", "contact", "about you", "where are you based",
-    "customer service", "support",
-  ],
-  // --- services (accountancy / professional) ---
-  accounting: [
-    "accountant", "accountants", "accounting", "accounts", "company accounts",
-    "year end", "self assessment", "corporation tax", "ct600", "hmrc",
-    "tax return", "tax returns", "tax planning", "capital allowances", "reliefs",
-  ],
-  bookkeeping: [
-    "bookkeeping", "books", "xero", "quickbooks", "reconciliation", "ledger",
-    "management accounts", "management reports", "receipts", "expenses", "cash flow",
-  ],
-  tax_services: [
-    "tax", "vat", "mtd", "making tax digital", "vat return", "flat rate",
-    "vat registration", "paye", "rti",
-  ],
-  payroll: [
-    "payroll", "payslip", "payslips", "p60", "p45", "pension",
-    "auto-enrolment", "ssp", "smp", "employees", "starter", "leaver",
-  ],
-  business_services: [
-    "limited company", "incorporation", "incorporate", "companies house",
-    "confirmation statement", "register", "registered", "sole trader", "contractor",
-    "landlord", "freelancer", "startup", "business support", "quote", "quotes",
-    "fees", "pricing", "how much", "cost", "contact", "email", "phone",
-    "rochdale", "opening hours", "ntm associates", "ntm-associates",
-  ],
-};
-
-export const RETAIL_DEFAULT_TOPICS = [
-  "products", "jewellery", "orders", "shipping", "returns",
-  "payments", "sizing", "jewellery_care", "gifts", "store",
-];
-
-export const SERVICES_DEFAULT_TOPICS = [
-  "accounting", "bookkeeping", "tax_services", "payroll", "business_services",
-];
-
-// ---------------------------------------------------------------------------
-// Off-topic signals (pre-filter only — the allowlist is the authority).
-// The blocklist exists purely so we can reject "obvious" unrelated messages
-// cheaply without spending a classifier call. Do NOT add bare tokens that
-// could appear in legit tenant copy (e.g. "apple"/"google" clash with
-// Apple Pay / Google Pay; "policy" appears in "returns policy").
-// ---------------------------------------------------------------------------
-
-export const OFF_TOPIC_PATTERNS: RegExp[] = [
-  // politics / government / war
-  /\b(politics|political|politician|election|vote|voting|government|prime minister|president|parliament|brexit|military|war|warfare)\b/i,
-  // news / current events
-  /\b(news|current events|headline|breaking news)\b/i,
-  // weather
-  /\b(weather|forecast|temperature|rainfall|snowfall)\b/i,
-  // coding / software
-  /\b(code|coding|programming|python|javascript|typescript|java|software|bug|debug|api|script|developer|algorithm|css|html|react|database|sql|computer|hacking|cyber)\b/i,
-  // maths
-  /\b(maths|math|mathematics|equation|algebra|calculus|trigonometry|geometry|integral|derivative)\b/i,
-  // sports
-  /\b(sports|sport|football|soccer|cricket|tennis|rugby|golf|hockey|world cup|premier league|olympics)\b/i,
-  // entertainment
-  /\b(movie|movies|film|films|song|songs|music|celebrity|actor|actress|netflix|spotify|video game|gaming)\b/i,
-  // general knowledge / homework / lifestyle
-  // (NOTE: "cooking"/"baking" are deliberately NOT here — they appear in
-  // legitimate jewellery care advice, e.g. "remove your rings before cooking".
-  // The topic allowlist still fails closed on truly off-topic requests.)
-  /\b(capital of|history of|homework|essay|recipe|recipes|how to cook|travel tips|tourism|horoscope|astrology)\b/i,
-  // famous people / other companies (avoid apple/google clash with Pay)
-  /\b(elon|musk|bill gates|steve jobs|mark zuckerberg|donald trump|obama|trump|tesla|microsoft|amazon|netflix|facebook|whatsapp)\b/i,
-  // meta / assistant-identity probes
-  /\b(write me a|tell me a story|tell me a joke|write an essay|write a poem|meaning of life|are you human|who are you really)\b/i,
-];
-
-// ---------------------------------------------------------------------------
-// Prompt-injection / jailbreak patterns (Gate 2).
-// ---------------------------------------------------------------------------
-
+// Platform-level prompt-injection / jailbreak patterns. These protect every
+// tenant equally and are intentionally unrelated to any business vertical.
 const INJECTION_PATTERNS: RegExp[] = [
   /\b(ignore (all |any |your |the |previous |prior )*(instructions|prompts|rules|system)|ignore your)\b/i,
   /\b(previous instructions|previous prompt|system prompt|system instructions|your instructions|the instructions)\b/i,
@@ -175,118 +28,97 @@ const INJECTION_PATTERNS: RegExp[] = [
   /\b(prompt injection|play the role of|become a general|pretend to be a general)\b/i,
 ];
 
-// ---------------------------------------------------------------------------
-// Opening / pleasantry detection — always allowed so a conversation can start.
-// ---------------------------------------------------------------------------
-
+// Generic conversational turns are not business topics and should never be
+// rejected by a tenant scope gate.
 const OPENING_RE =
-  /^(hi|hi there|hello|hello there|hey|yo|good (morning|afternoon|evening)|how are you|how'?s it going|thanks|thank you|thanks a lot|bye|goodbye|help|help me|i need help|what can you do|what can you help (me )?with|what do you do|what do you sell|what do you offer|how do you work|how does this work|start over|restart|are you there|who are you|what are you|welcome)\b/i;
+  /^(hi|hi there|hello|hello there|hey|yo|good (morning|afternoon|evening)|how are you|how'?s it going|thanks|thank you|thanks a lot|bye|goodbye|help|help me|i need help|what can you do|what can you help (me )?with|what do you do|what do you offer|how do you work|how does this work|start over|restart|are you there|who are you|what are you|welcome)\b/i;
 
-function isOpening(m: string): boolean {
-  return OPENING_RE.test(m.trim());
+function isOpening(message: string): boolean {
+  return OPENING_RE.test(message.trim());
 }
 
-// ---------------------------------------------------------------------------
-// Policy construction
-// ---------------------------------------------------------------------------
+const STOP_WORDS = new Set([
+  "the", "and", "for", "with", "from", "this", "that", "your", "you", "our",
+  "are", "can", "could", "would", "what", "when", "where", "how", "about", "into",
+  "have", "has", "had", "does", "do", "please", "help", "service", "services",
+  "business", "customer", "customers", "information", "enquiry", "enquiries",
+]);
 
-export function buildPolicy(tenant: Tenant): TenantPolicy {
-  const retail = tenant.kind !== "services";
-  const p = tenant.policy;
-  return {
-    allowedTopics:
-      p?.allowedTopics?.length
-        ? p.allowedTopics
-        : retail
-          ? [...RETAIL_DEFAULT_TOPICS]
-          : [...SERVICES_DEFAULT_TOPICS],
-    refusalMessage:
-      p?.refusalMessage ??
-      `I'm sorry, I can only help with ${tenant.name} products, orders, delivery, returns and other services provided by ${tenant.name}.`,
-    securityLevel: p?.securityLevel ?? (retail ? "extra-strict" : "strict"),
-    useModelClassifier: p?.useModelClassifier ?? false,
-  };
+function normalise(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
+function significantTokens(value: string): string[] {
+  return normalise(value)
+    .split(" ")
+    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+}
+
+/**
+ * Fast tenant-specific lexical check.
+ *
+ * allowedTopics are free-text tenant concepts, not keys into a global lexicon.
+ * Values may describe any tenant-specific product, service, policy or support
+ * area — the engine does not know or care which industry they belong to.
+ */
 export function hasOnTopicSignal(message: string, policy: TenantPolicy): boolean {
-  const m = message.toLowerCase();
-  for (const topic of policy.allowedTopics) {
-    const words = TOPIC_LEXICON[topic];
-    if (!words) continue;
-    for (const w of words) {
-      if (m.includes(w)) return true;
-    }
+  const m = normalise(message);
+  if (!m) return false;
+
+  const concepts = [
+    ...policy.allowedTopics,
+    ...(policy.scopeContext ? [policy.scopeContext] : []),
+  ].filter(Boolean);
+
+  for (const concept of concepts) {
+    const c = normalise(concept);
+    if (!c) continue;
+    if (m.includes(c) || c.includes(m)) return true;
+
+    const conceptTokens = significantTokens(c);
+    if (!conceptTokens.length) continue;
+    const messageTokens = new Set(significantTokens(m));
+    const matches = conceptTokens.filter((token) => messageTokens.has(token)).length;
+
+    // One distinctive token is enough for a short topic label (e.g. "Payroll").
+    // For longer descriptions require at least two token matches unless the
+    // concept itself is only one significant token.
+    if (conceptTokens.length === 1 && matches === 1) return true;
+    if (matches >= 2) return true;
   }
+
   return false;
 }
 
-// ---------------------------------------------------------------------------
-// Order-tracking / contact follow-up signals (Gate 3).
-//
-// Mid-flow a customer may reply with ONLY their order number and/or checkout
-// email (e.g. "#314 amelia@example.com") without repeating any topic keyword.
-// These are unambiguous order/contact signals and must stay in-scope, or the
-// strict allowlist would refuse a legitimate order lookup. A bare number with
-// no order marker or email still fails closed.
-// ---------------------------------------------------------------------------
+export function buildPolicy(tenant: Tenant): TenantPolicy {
+  const configured = tenant.policy;
+  const allowedTopics = Array.isArray(configured?.allowedTopics)
+    ? configured!.allowedTopics.map((x) => String(x).trim()).filter(Boolean)
+    : [];
 
-const ORDER_MARKER_RE = /\b(order\s*#?\s*\d+|#\s*\d{2,})\b/i;
-const EMAIL_RE = /\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i;
+  const scopeContext = [
+    tenant.industry ? `Industry: ${tenant.industry}` : "",
+    tenant.businessContext ? `Business: ${tenant.businessContext}` : "",
+  ].filter(Boolean).join("\n");
 
-function hasOrderFollowUpSignal(m: string): boolean {
-  return EMAIL_RE.test(m) || ORDER_MARKER_RE.test(m);
+  return {
+    allowedTopics,
+    scopeContext,
+    refusalMessage:
+      configured?.refusalMessage?.trim() ||
+      `I'm sorry, I can only help with ${tenant.name} and enquiries related to this business.`,
+    securityLevel: configured?.securityLevel ?? "strict",
+    // Strict tenants should use semantic classification for messages that do
+    // not have an obvious lexical match. This keeps scope safe without baking
+    // any tenant's vocabulary into source code.
+    useModelClassifier: configured?.useModelClassifier ?? true,
+  };
 }
-
-// ---------------------------------------------------------------------------
-// Support-ticket signals (convo2 — Gate 3).
-//
-// A customer describing a problem that needs human help (damaged item, missing
-// order, wrong product, defect, complaint, explicit "speak to support" request)
-// may not use a topic keyword the allowlist recognises. These messages must
-// still pass the topic gate so the AI can offer create_ticket. The AI still
-// confirms before raising a ticket — the gate only decides what reaches it.
-// ---------------------------------------------------------------------------
-
-const TICKET_SIGNALS: RegExp[] = [
-  /\b(damaged|damage|broken|broke|faulty|fault|defective|defect|malfunction|not working|stopped working)\b/i,
-  /\b(missing|haven'?t received|never arrived|didn'?t arrive|not (been )?delivered)\b/i,
-  /\b(wrong (item|product|order|size)|incorrect (item|product|order))\b/i,
-  /\b(complaint|complain|complained)\b/i,
-  /\b(speak to|talk to|contact|see|reach) (a |the )?(human|support|someone|person|agent|team)\b/i,
-  /\b(refund (problem|issue)|refund not (received|arrived)|no refund)\b/i,
-  // Bare "ticket"/"tickets" — asking about a support ticket is inherently
-  // in-scope (convo5). Without this, "what's the status of my ticket?" fails
-  // closed on the allowlist. Ownership is still verified by reference + email
-  // inside check_ticket_status, so this only widens reach, not data access.
-  /\b(ticket|tickets)\b/i,
-];
-
-function hasTicketSignal(m: string): boolean {
-  return TICKET_SIGNALS.some((p) => p.test(m));
-}
-
-// ---------------------------------------------------------------------------
-// GDPR / data-subject request signals (convo5 — Gate 3).
-//
-// A customer asking to see, correct or delete their personal data, or asking
-// about privacy/GDPR, is a legitimate support topic. These messages must pass
-// the topic gate so the assistant can explain their rights and offer a support
-// ticket (erasure is human-processed, never automated).
-// ---------------------------------------------------------------------------
-
-const GDPR_SIGNALS: RegExp[] = [
-  /\b(delete|erase|remove|forget) (all |any )?(my |the )?(personal )?(data|information|details|records|info|account)\b|\bforget me\b/i,
-  /\b(what data do you (have|hold|store) (on|about) me|access to my data|see my data)\b/i,
-  /\b(gdpr|data protection|privacy policy|right to (access|erasure|be forgotten|rectification)|personal data)\b/i,
-];
-
-function hasGdprSignal(m: string): boolean {
-  return GDPR_SIGNALS.some((p) => p.test(m));
-}
-
-// ---------------------------------------------------------------------------
-// Gate 2 — Input safety / prompt injection
-// ---------------------------------------------------------------------------
 
 export function checkInputSafety(message: string): GateResult {
   const m = message.trim();
@@ -297,121 +129,57 @@ export function checkInputSafety(message: string): GateResult {
   return { allowed: true, reason: "ok" };
 }
 
-// ---------------------------------------------------------------------------
-// Gate 3 — Topic gate (tenant-scope allowlist)
-// ---------------------------------------------------------------------------
-
 /**
- * Deterministic allowlist gate. `classify` is an optional cheap classifier
- * used only for ambiguous messages when policy.useModelClassifier is set.
+ * Tenant scope gate.
+ *
+ * 1. Generic conversation is allowed.
+ * 2. Fast match against tenant-owned scope data.
+ * 3. Ambiguous messages are semantically classified against tenant-owned
+ *    scope data when configured.
+ * 4. Strict modes fail closed if classification is unavailable/negative.
  */
 export async function checkTopicGate(
   message: string,
   policy: TenantPolicy,
   classify?: (msg: string) => Promise<boolean>,
 ): Promise<GateResult> {
-  const m = message.trim().toLowerCase();
+  const m = message.trim();
   if (!m) return { allowed: false, reason: "empty" };
 
   if (isOpening(m)) return { allowed: true, reason: "ok" };
-
   if (hasOnTopicSignal(m, policy)) return { allowed: true, reason: "ok" };
 
-  // Obvious off-topic → reject without spending a model call.
-  if (OFF_TOPIC_PATTERNS.some((p) => p.test(m))) {
-    return { allowed: false, reason: "off-topic" };
-  }
-
-  // Order-tracking / contact follow-up ("#314 amelia@example.com", "314",
-  // "amelia@example.com") — no topic keyword repeated, but clearly order scope.
-  if (hasOrderFollowUpSignal(m)) return { allowed: true, reason: "ok" };
-
-  // Support-ticket signals ("my necklace arrived damaged", "I need to speak
-  // to support") — in-scope; the AI may offer create_ticket for these.
-  if (hasTicketSignal(m)) return { allowed: true, reason: "ok" };
-
-  // GDPR / data-subject requests ("delete my data", "what is your privacy
-  // policy?") — in-scope; the assistant explains rights and offers a ticket.
-  if (hasGdprSignal(m)) return { allowed: true, reason: "ok" };
-
-  // Ambiguous. Fail closed unless a cheap classifier approves it.
-  if (policy.securityLevel !== "standard") {
-    if (policy.useModelClassifier && classify) {
-      try {
-        if (await classify(message)) return { allowed: true, reason: "ok" };
-      } catch {
-        // classifier failure → stay closed
-      }
+  if (policy.useModelClassifier && classify) {
+    try {
+      if (await classify(message)) return { allowed: true, reason: "ok" };
+    } catch {
+      // Strict modes deliberately fail closed on classifier failure.
     }
-    return { allowed: false, reason: "off-topic" };
   }
-  return { allowed: true, reason: "ok" };
+
+  if (policy.securityLevel === "standard") {
+    return { allowed: true, reason: "ok" };
+  }
+
+  return { allowed: false, reason: "off-topic" };
 }
 
-// ---------------------------------------------------------------------------
-// Gate 5 — Output gate (response validator)
-// ---------------------------------------------------------------------------
-
+// Platform-wide leak detector. It contains no tenant or industry names.
 const LEAK_RE =
   /\b(system prompt|system instructions|internal configuration|internal config|api ?key|access token|secret|credentials|tenant id|service role|bearer)\b/i;
 
-/** Other tenants the model must never mention in another tenant's reply. */
-const OTHER_TENANT_NAMES = ["ntm associates", "ntm-associates", "ivy & pearls", "ivy and pearls"];
-
-/**
- * Gate 5 — output gate (response validator).
- *
- * productNames: names of products the agent actually retrieved from the
- * tenant's own catalogue via tools. When the reply references one of them,
- * the fuzzy OFF_TOPIC heuristic is skipped, because a legitimate product
- * name can legitimately contain an off-topic keyword (e.g. a "Tennis
- * Bracelet" colliding with the sports keyword). Leak and cross-tenant
- * checks above remain absolute and always apply.
- */
 export function checkOutputGate(
   reply: string,
-  tenant: Tenant,
-  policy: TenantPolicy,
-  productNames: string[] = [],
-  opts?: { authoritativeContext?: boolean },
+  _tenant: Tenant,
+  _policy: TenantPolicy,
+  _productNames: string[] = [],
+  _opts?: { authoritativeContext?: boolean },
 ): GateResult {
   const r = reply.trim();
   if (!r) return { allowed: false, reason: "empty" };
-
-  const low = r.toLowerCase();
-
-  if (LEAK_RE.test(low)) return { allowed: false, reason: "leak" };
-
-  const self = tenant.name.toLowerCase();
-  for (const n of OTHER_TENANT_NAMES) {
-    if (n !== self && low.includes(n)) return { allowed: false, reason: "cross-tenant" };
-  }
-
-  const mentionsOwnProduct = productNames.some((name) => {
-    const n = (name ?? "").toLowerCase();
-    if (!n) return false;
-    if (low.includes(n)) return true;
-    // Fall back to any distinctive (>=5 char) word in the product name, so we
-    // still catch replies that paraphrase or partially quote the name.
-    const words = n.split(/[^a-z0-9]+/).filter((w) => w.length >= 5);
-    return words.some((w) => low.includes(w));
-  });
-
-  // If the model produced an obviously off-topic reply (went off the rails),
-  // discard it and fall back to the fixed refusal.
-  // SKIP when authoritativeContext is true — the model's knowledge came from
-  // the store's own website, so off-topic tokens from that seeded text are
-  // legitimate (e.g. "weather" appearing in a delivery page is fine).
-  if (!opts?.authoritativeContext && !mentionsOwnProduct && OFF_TOPIC_PATTERNS.some((p) => p.test(r))) {
-    return { allowed: false, reason: "off-topic" };
-  }
-
+  if (LEAK_RE.test(r)) return { allowed: false, reason: "leak" };
   return { allowed: true, reason: "ok" };
 }
-
-// ---------------------------------------------------------------------------
-// Fixed refusal response (§10) — the ONLY thing an out-of-scope customer sees.
-// ---------------------------------------------------------------------------
 
 export function refusalReply(policy: TenantPolicy): string {
   return policy.refusalMessage;

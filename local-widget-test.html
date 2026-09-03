@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChatWidget Local Test</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      padding: 2rem;
+      background: #111;
+      color: #eee;
+    }
+    h1 { margin-bottom: 1rem; }
+    .info { color: #888; margin-bottom: 2rem; }
+    .status {
+      padding: 1rem;
+      border-radius: 8px;
+      margin-top: 1rem;
+    }
+    .status.success { background: #1a4d1a; color: #4ade80; }
+    .status.error { background: #4d1a1a; color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>ChatWidget Local Test Page</h1>
+  <p class="info">Testing the widget from Vercel (public URL, no SSO required).</p>
+
+  <div id="status" class="status">Loading widget...</div>
+
+    <!-- ChatWidget -->
+    <script async src="https://widget-omega-nine.vercel.app/widget.js" data-chatbot="cb_cd2f2c82"></script>
+    <script>
+    setTimeout(() => {
+      const status = document.getElementById('status');
+      if (document.querySelector('.chat-widget')) {
+        status.className = 'status success';
+        status.textContent = 'Widget loaded! Check bottom-right for chat bubble.';
+      }
+    }, 3000);
+  </script>
+</body>
+</html>

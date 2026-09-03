@@ -13,9 +13,11 @@ export type ProviderName = "mock" | "openai" | "gemini";
  *   Gate 5  Output gate        (response validator)
  */
 export interface TenantPolicy {
-  /** Allowlist of topics this tenant's chatbot may discuss. Keys into the
-   *  topic lexicon (see _shared/policy.ts). Everything else is rejected. */
+  /** Tenant-owned free-text scope concepts. These are DATA, not keys into a
+   * global industry lexicon. */
   allowedTopics: string[];
+  /** Additional tenant-owned context used by the semantic scope classifier. */
+  scopeContext?: string;
   /** Fixed refusal response returned when a request fails a gate (§10).
    *  The model is told to use exactly this when asked out of scope. */
   refusalMessage: string;
@@ -29,8 +31,10 @@ export interface TenantPolicy {
 export interface Tenant {
   id: string;
   slug: string;
-  name: string; // business name, e.g. "Ivy & Pearls"
-  kind?: "retail" | "services"; // retail: product catalogue; services: knowledge-led
+  name: string;
+  /** Optional tenant-provided industry label; never used for hard-coded branching. */
+  industry?: string;
+  kind?: "retail" | "services"; // legacy compatibility only; scope is tenant-configured
   storeUrl?: string;
   currency: string;
   welcomeMessage: string;
@@ -83,6 +87,8 @@ export interface Chatbot {
   tenantId: string;
   name: string;
   active: boolean;
+  /** Public-safe presentation settings are selectively exposed by widget-config. */
+  config?: Record<string, unknown>;
   // Which tool permission levels this chatbot may use.
   // Default: read + customer actions. Admin/sensitive are added per business.
   permissions?: ToolPermission[];

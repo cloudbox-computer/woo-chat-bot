@@ -23,7 +23,7 @@ import { handleOptions, json, badRequest, notFound } from "../_shared/cors.ts";
 import { controlsForChatbot, originAllowed } from "../_shared/enterprise.ts";
 
 function publicConfig(
-  bot: { id: string; name: string },
+  bot: { id: string; name: string; config?: Record<string, unknown> },
   tenant: {
     name: string;
     welcomeMessage?: string;
@@ -33,6 +33,21 @@ function publicConfig(
     privacyPolicyUrl?: string;
   },
 ) {
+  const rawQuickActions = bot.config?.quickActions;
+  const quickActions = Array.isArray(rawQuickActions)
+    ? rawQuickActions.slice(0, 8).map((item) => {
+        if (typeof item === "string") {
+          const text = item.trim();
+          return text ? { label: text, prompt: text } : null;
+        }
+        if (!item || typeof item !== "object") return null;
+        const row = item as Record<string, unknown>;
+        const label = typeof row.label === "string" ? row.label.trim() : "";
+        const prompt = typeof row.prompt === "string" ? row.prompt.trim() : label;
+        return label ? { label, prompt: prompt || label } : null;
+      }).filter(Boolean)
+    : [];
+
   return {
     chatbotId: bot.id,
     active: true,
@@ -46,6 +61,7 @@ function publicConfig(
     storeUrl: tenant.storeUrl ?? null,
     // GDPR: public privacy-policy URL so the widget can link to it.
     privacyPolicyUrl: tenant.privacyPolicyUrl ?? null,
+    quickActions,
   };
 }
 
