@@ -1,16 +1,12 @@
 {
-  "name": "chatbot-system",
-  "version": "0.1.0",
+  "name": "woo-chat-bot",
   "private": true,
   "description": "Tenant-based e-commerce chatbot platform (Supabase Edge Functions + React widget). First tenant: Ivy & Pearls.",
   "scripts": {
-    "dev": "bun scripts/dev-server.ts",
-    "build:widget": "bun --cwd widget build",
-    "test": "bun scripts/local-test.ts",
-    "typecheck": "bunx tsc --noEmit -p supabase && bun --cwd widget typecheck"
+    "build": "npm run build --workspace=dashboard",
+    "dev": "npm run dev --workspace=dashboard"
   },
-  "devDependencies": {
-    "@types/deno": "^2.7.0",
-    "deno": "^2.9.5"
-  }
+  "workspaces": [
+    "dashboard"
+  ]
 }
