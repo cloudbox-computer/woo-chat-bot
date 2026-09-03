@@ -1,0 +1,22 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - run: bun install --frozen-lockfile
+      - run: bun install --cwd dashboard --frozen-lockfile
+      - run: bun install --cwd widget --frozen-lockfile
+      - run: bun --cwd dashboard typecheck
+      - run: bun --cwd dashboard build
+      - run: bun --cwd widget typecheck
+      - run: bun --cwd widget build
+      - run: bun scripts/local-test.ts
+      - run: bun scripts/enterprise-invariants.ts
