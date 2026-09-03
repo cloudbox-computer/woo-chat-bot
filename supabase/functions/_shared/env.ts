@@ -47,7 +47,7 @@ export function aiConfig(): {
   } else if (geminiKey) {
     provider = "gemini";
   } else {
-    provider = "mock";
+    throw new Error("No AI provider configured. Set OPENAI_API_KEY or GEMINI_API_KEY, or explicitly set AI_PROVIDER=mock for local tests only.");
   }
   return {
     provider,

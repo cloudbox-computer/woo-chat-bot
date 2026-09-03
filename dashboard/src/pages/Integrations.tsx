@@ -16,6 +16,8 @@ export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
   const [webhookSecret,setWebhookSecret]=React.useState("");
   const [supaUrl, setSupaUrl] = React.useState("");
   const [supaKey, setSupaKey] = React.useState("");
+  const [supaCapabilityConfig, setSupaCapabilityConfig] = React.useState("");
+  const [supaQueryPolicy, setSupaQueryPolicy] = React.useState("");
   const [resendKey, setResendKey] = React.useState("");
   const [resendFromEmail, setResendFromEmail] = React.useState("");
   const [resendFromName, setResendFromName] = React.useState("");
@@ -41,6 +43,8 @@ export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
     setWebhookSecret("");
     setSupaUrl("");
     setSupaKey("");
+    setSupaCapabilityConfig("");
+    setSupaQueryPolicy("");
     setResendKey("");
     setResendFromEmail("");
     setResendFromName("");
@@ -69,19 +73,37 @@ export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
   }
 
   async function saveSupa() {
-    if (!supaUrl.trim()) {
+    const existingSupa = items?.find((i) => i.provider === "supabase");
+    const effectiveUrl = supaUrl.trim() || existingSupa?.url || "";
+    if (!effectiveUrl) {
       toast("err", "Supabase project URL is required");
+      return;
+    }
+    let capabilityConfig: Record<string, unknown> | undefined;
+    let queryPolicy: Record<string, unknown> | undefined;
+    try {
+      capabilityConfig = supaCapabilityConfig.trim() ? JSON.parse(supaCapabilityConfig) : undefined;
+      queryPolicy = supaQueryPolicy.trim() ? JSON.parse(supaQueryPolicy) : undefined;
+    } catch {
+      toast("err", "Capability mapping and business-data policy must be valid JSON");
       return;
     }
     setBusy(true);
     try {
       await updateIntegration(tenantId, {
         provider: "supabase",
-        credentials: { url: supaUrl.trim(), anon_key: supaKey.trim() },
+        credentials: {
+          url: effectiveUrl,
+          anon_key: supaKey.trim() || undefined,
+          capability_config: capabilityConfig ?? (existingSupa?.capabilityConfig ? null : undefined),
+          query_policy: queryPolicy ?? (existingSupa?.queryPolicy ? null : undefined),
+        },
       });
       setShowSupa(false);
       setSupaUrl("");
       setSupaKey("");
+      setSupaCapabilityConfig("");
+      setSupaQueryPolicy("");
       toast("ok", "Supabase connected");
       await load();
     } catch (e) {
@@ -209,7 +231,12 @@ export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
 
         {!showSupa ? (
           <div style={{ marginTop: 8 }}>
-            <button className="btn secondary" onClick={() => setShowSupa(true)}>
+            <button className="btn secondary" onClick={() => {
+              setShowSupa(true);
+              setSupaUrl(supa?.url ?? "");
+              setSupaCapabilityConfig(supa?.capabilityConfig ? JSON.stringify(supa.capabilityConfig, null, 2) : "");
+              setSupaQueryPolicy(supa?.queryPolicy ? JSON.stringify(supa.queryPolicy, null, 2) : "");
+            }}>
               {supa?.configured ? "Update connection" : "Connect Supabase"}
             </button>
             {supa?.configured && <button className="btn ghost" disabled={busy} onClick={() => runTest("supabase")}>Test connection</button>}
@@ -224,6 +251,47 @@ export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
             </Field>
             <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
               Find these in Supabase Dashboard → Settings → API. The anon key is required for the assistant to query your tables.
+            </div>
+            <Field label="Capability mapping (optional JSON)">
+              <textarea
+                value={supaCapabilityConfig}
+                onChange={(e) => setSupaCapabilityConfig(e.target.value)}
+                rows={10}
+                placeholder={`{
+  "catalogue": {
+    "table": "products",
+    "fields": { "id": "id", "name": "name", "price": "price", "image_url": "image_url" }
+  },
+  "orders": {
+    "table": "orders",
+    "identityColumn": "customer_email"
+  }
+}`}
+              />
+            </Field>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+              Optional. Map your database to business capabilities. The AI still sees only generic tools such as search_products or track_order and never sees Supabase/table implementation details.
+            </div>
+            <Field label="Customer business-data resources (optional JSON)">
+              <textarea
+                value={supaQueryPolicy}
+                onChange={(e) => setSupaQueryPolicy(e.target.value)}
+                rows={10}
+                placeholder={`{
+  "tables": {
+    "bookings": {
+      "table": "customer_bookings",
+      "columns": ["id", "email", "date", "status"],
+      "identityColumn": "email",
+      "orderColumns": ["date"],
+      "maxRows": 20
+    }
+  }
+}`}
+              />
+            </Field>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+              Resource keys such as “bookings” are the only names exposed to the AI. Physical table names remain server-side configuration.
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <button className="btn" disabled={busy} onClick={saveSupa}>Save</button>

@@ -127,6 +127,15 @@ export class MemoryDb implements Db {
   }
 }
 
+function permissionsFromConfig(config: unknown): Chatbot["permissions"] {
+  if (!config || typeof config !== "object") return undefined;
+  const raw = (config as Record<string, unknown>).permissions;
+  if (!Array.isArray(raw)) return undefined;
+  const allowed = new Set(["read", "cart", "support", "sensitive", "admin"]);
+  const permissions = raw.filter((p): p is "read" | "cart" | "support" | "sensitive" | "admin" => typeof p === "string" && allowed.has(p));
+  return permissions.length ? permissions : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // PostgREST-backed store (Supabase). Tables from supabase/schema.sql.
 // ---------------------------------------------------------------------------
@@ -162,9 +171,9 @@ export class SupabaseDb implements Db {
 
   private async mapTenant(row: Record<string, unknown>): Promise<Tenant> {
     const integ = row.integrations as Array<Record<string, unknown>> | undefined;
-    const wooInteg = integ?.find((i) => i.provider === "woocommerce");
+    const wooInteg = integ?.find((i) => i.provider === "woocommerce" && i.active !== false);
     const wooCreds = (wooInteg?.credentials ?? {}) as Record<string, string>;
-    const resendInteg = integ?.find((i) => i.provider === "resend");
+    const resendInteg = integ?.find((i) => i.provider === "resend" && i.active !== false);
     const resendCreds = (resendInteg?.credentials ?? {}) as Record<string, string>;
     const scope = (row.scope ?? {}) as Record<string, unknown>;
     const allowedTopics = scope.allowedTopics;
@@ -210,19 +219,25 @@ export class SupabaseDb implements Db {
       ticketPrefix: row.ticket_prefix ? String(row.ticket_prefix) : undefined,
       privacyPolicyUrl: row.privacy_policy_url ? String(row.privacy_policy_url) : undefined,
       supabaseUrl: (() => {
-        const supabaseInteg = integ?.find((i) => i.provider === "supabase");
+        const supabaseInteg = integ?.find((i) => i.provider === "supabase" && i.active !== false);
         const credentials = supabaseInteg?.credentials as Record<string, unknown> | undefined;
         return credentials?.url ? String(credentials.url) : undefined;
       })(),
       supabaseAnonKey: await (async () => {
-        const supabaseInteg = integ?.find((i) => (i as Record<string, unknown>).provider === "supabase");
+        const supabaseInteg = integ?.find((i) => (i as Record<string, unknown>).provider === "supabase" && i.active !== false);
         return supabaseInteg ? await decryptSecret(((supabaseInteg as Record<string, unknown>).credentials as Record<string, unknown> | undefined)?.anon_key) : undefined;
       })(),
       supabaseQueryPolicy: (() => {
-        const supabaseInteg = integ?.find((i) => (i as Record<string, unknown>).provider === "supabase");
+        const supabaseInteg = integ?.find((i) => (i as Record<string, unknown>).provider === "supabase" && i.active !== false);
         const credentials = supabaseInteg ? (supabaseInteg as Record<string, unknown>).credentials as Record<string, unknown> : undefined;
         const policy = credentials?.query_policy;
         return policy && typeof policy === "object" ? policy as Tenant["supabaseQueryPolicy"] : undefined;
+      })(),
+      supabaseCapabilityConfig: (() => {
+        const supabaseInteg = integ?.find((i) => (i as Record<string, unknown>).provider === "supabase" && i.active !== false);
+        const credentials = supabaseInteg ? (supabaseInteg as Record<string, unknown>).credentials as Record<string, unknown> : undefined;
+        const config = credentials?.capability_config;
+        return config && typeof config === "object" ? config as Tenant["supabaseCapabilityConfig"] : undefined;
       })(),
     };
   }
@@ -231,7 +246,7 @@ export class SupabaseDb implements Db {
     const bot = await this.getChatbot(chatbotId);
     if (!bot) return null;
     const rows = await this.get<Record<string, unknown>>("tenants", {
-      select: "id,slug,name,industry,currency,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(credentials)",
+      select: "id,slug,name,industry,currency,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(provider,credentials,active)",
       id: `eq.${bot.tenantId}`,
       limit: "1",
     });
@@ -253,6 +268,7 @@ export class SupabaseDb implements Db {
       name: String(bot.name),
       active: true,
       config: bot.config && typeof bot.config === "object" ? (bot.config as Record<string, unknown>) : {},
+      permissions: permissionsFromConfig(bot.config),
     };
   }
 
@@ -271,6 +287,7 @@ export class SupabaseDb implements Db {
       name: String(bot.name),
       active: true,
       config: bot.config && typeof bot.config === "object" ? (bot.config as Record<string, unknown>) : {},
+      permissions: permissionsFromConfig(bot.config),
     };
   }
 

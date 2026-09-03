@@ -60,7 +60,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
     if (opts.knowledgeContext) {
       messages.push({
         role: "system",
-        content: `Store knowledge from the store's own website (treat as authoritative facts — answer the customer's question directly from it, never refuse):\n${opts.knowledgeContext}`,
+        content: `Tenant website knowledge (treat as authoritative facts — answer the customer's question directly from it, never refuse):\n${opts.knowledgeContext}`,
       });
     }
     for (const h of opts.history) messages.push({ role: h.role, content: h.content });
@@ -131,7 +131,7 @@ class ResilientProvider implements AiProvider {
 
 export class MockProvider implements AiProvider {
   name: ProviderName = "mock";
-  constructor(private tenant?: { name?: string; retail?: boolean }) {}
+  constructor(private tenant?: { name?: string }) {}
 
   async chat(opts: {
     system: string;
@@ -146,16 +146,6 @@ export class MockProvider implements AiProvider {
       toolCalls: [{ id, name, arguments: args }],
     });
 
-    // Deterministic map for the mock catalogue: keyword → product id.
-    const productIdFromName = (m: string): number => {
-      if (/pearl/.test(m)) return 102;
-      if (/hoop|earring/.test(m)) return 103;
-      if (/bracelet/.test(m)) return 104;
-      if (/ring/.test(m)) return 105;
-      if (/gold/.test(m) || /necklace/.test(m)) return 101;
-      return 101;
-    };
-
     // If the previous turn was a tool call, answer using the tool result
     // (deterministic one-tool-call-then-answer behaviour for the mock).
     const last = opts.history[opts.history.length - 1];
@@ -167,24 +157,9 @@ export class MockProvider implements AiProvider {
     const trimmed = msg.trim();
     if (trimmed.length < 40 && /^(hi|hello|hey|yo|good (morning|afternoon|evening)|how are you|thanks|thank you|bye)/.test(trimmed)) {
       return {
-        content:
-          `Hello! I'm the ${this.tenant?.name ?? "Ivy & Pearls"} assistant. ` +
-          (this.tenant?.retail === false
-            ? "I can help with questions about our services, fees, deadlines and how to get started. What would you like to know?"
-            : "I can help you find products, check stock, track an order, or recommend a gift. What are you looking for today?"),
+        content: `Hello! I'm the ${this.tenant?.name ?? "business"} assistant. How can I help you today?`,
         toolCalls: [],
       };
-    }
-
-    // Non-retail tenant (e.g. accountancy): answer from the knowledge base
-    if (this.tenant?.retail === false) {
-      if (toolNames.has("search_knowledge")) {
-        return tool("search_knowledge", { query: opts.userMessage });
-      }
-      const fallback =
-        "I can help with questions about our services, fees, deadlines and how to get started. " +
-        "Try: \"what services do you offer?\", \"how much does bookkeeping cost?\", or \"how do I contact you?\".";
-      return { content: fallback, toolCalls: [] };
     }
 
     // Order tracking
@@ -215,20 +190,11 @@ export class MockProvider implements AiProvider {
     if (/(checkout|pay (now|for)|place (my |the )?order|buy (it|now|these)|go to basket)/.test(msg) && toolNames.has("create_checkout")) {
       return tool("create_checkout", {});
     }
-    if (/(add|put|stick|throw|pop).*(cart|basket)|(add|put).*basket/.test(msg) && toolNames.has("add_to_cart")) {
-      // Deterministic product pick for the demo catalogue; a real model
-      // resolves the product from the conversation instead.
-      const idMatch = /\b#?(10\d)\b/.exec(opts.userMessage);
-      const wordMap: Record<string, number> = {
-        "gold chain": 101, "chain": 101, "gold necklace": 101, "necklace": 101,
-        "pearl": 102, "hoop": 103, "earring": 103, "earrings": 103,
-        "bracelet": 104, "bangle": 104,
-      };
-      let productId = idMatch ? Number(idMatch[1]) : 101;
-      for (const [k, v] of Object.entries(wordMap)) {
-        if (opts.userMessage.toLowerCase().includes(k)) { productId = v; break; }
-      }
-      return tool("add_to_cart", { productId, quantity: 1 });
+    if (/(add|put|stick|throw|pop).*(cart|basket)|(add|put).*basket/.test(msg)) {
+      // The mock provider never invents product IDs. Resolve the product via
+      // the authoritative catalogue capability first.
+      if (toolNames.has("search_products")) return tool("search_products", { query: opts.userMessage });
+      return { content: "I can't add that item because no authoritative product catalogue is connected.", toolCalls: [] };
     }
 
     // Anything product-related → search
@@ -238,10 +204,6 @@ export class MockProvider implements AiProvider {
         .replace(/\b(under|less than|below|up to|around|about)\b.*$/, "")
         .replace(/[?.!]/g, "")
         .trim();
-      // Plural -> singular ("gold necklaces" -> "gold necklace") since the
-      // mock catalogue uses singular names, like WooCommerce's stemming.
-      query = query.replace(/necklaces/g, "necklace").replace(/earrings/g, "earring")
-        .replace(/bracelets/g, "bracelet").replace(/rings/g, "ring").replace(/pendants/g, "pendant");
       const price = /\b(?:under|less than|below|up to|around|about)\s*£?\s?(\d{2,4})\b/.exec(opts.userMessage);
       const colour = /\b(gold|silver|rose gold|white gold|platinum)\b/.exec(opts.userMessage)?.[1];
       return tool("search_products", {
@@ -252,11 +214,8 @@ export class MockProvider implements AiProvider {
     }
 
     // Fallback: conversational reply
-    const fallback =
-      "I can help you find products, check an order, or answer questions about our jewellery. " +
-      "Try: \"show me gold necklaces under £100\", \"where is my order?\", or \"what's your returns policy?\". " +
-      "Or tell me what you're shopping for — I'll point you to the right pieces.";
-    return { content: fallback, toolCalls: [] };
+    if (toolNames.has("search_knowledge")) return tool("search_knowledge", { query: opts.userMessage });
+    return { content: "I can help with this business using the information and capabilities currently connected.", toolCalls: [] };
   }
 }
 
@@ -266,11 +225,11 @@ export function providerFromConfig(cfg: {
   openaiBaseUrl?: string;
   geminiKey?: string;
   geminiBaseUrl?: string;
-}, tenant?: { name?: string; retail?: boolean }): AiProvider {
+}, tenant?: { name?: string }): AiProvider {
   if (cfg.provider === "mock") return new MockProvider(tenant);
   const openai = cfg.openaiKey ? new OpenAiCompatibleProvider({ name: "openai", apiKey: cfg.openaiKey, baseUrl: cfg.openaiBaseUrl ?? "https://api.openai.com/v1" }) : undefined;
   const gemini = cfg.geminiKey ? new OpenAiCompatibleProvider({ name: "gemini", apiKey: cfg.geminiKey, baseUrl: cfg.geminiBaseUrl ?? "https://generativelanguage.googleapis.com/v1beta/openai" }) : undefined;
   if (cfg.provider === "gemini" && gemini) return new ResilientProvider(gemini, openai);
   if (cfg.provider === "openai" && openai) return new ResilientProvider(openai, gemini);
-  return new MockProvider(tenant);
+  throw new Error(`AI provider ${cfg.provider} is not configured with valid credentials`);
 }

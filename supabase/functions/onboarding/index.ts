@@ -22,6 +22,7 @@ import { DashboardError, authUserFromRequest, embedScriptFor } from "../_shared/
 import { handleOptions, json } from "../_shared/cors.ts";
 import { env, supabaseConfig, aiConfig, modelFor } from "../_shared/env.ts";
 import { OpenAiCompatibleProvider } from "../_shared/ai.ts";
+import { encryptSecret } from "../_shared/secrets.ts";
 
 interface WizardKnowledge {
   title: string;
@@ -30,7 +31,7 @@ interface WizardKnowledge {
 }
 interface WizardIntegration {
   provider: "woocommerce" | "supabase";
-  credentials: Record<string, string>;
+  credentials: Record<string, unknown>;
 }
 
 interface OnboardingBody {
@@ -195,7 +196,11 @@ export async function handleOnboarding(req: Request): Promise<Response> {
     active: true,
     public_id: publicId,
     config: {
-      permissions: ["read", "cart", "support"],
+      permissions: [
+        "read",
+        "support",
+        ...(Array.isArray(body.integrations) && body.integrations.some((i) => i?.provider === "woocommerce") ? ["cart"] : []),
+      ],
       welcome: (body.welcomeMessage ?? "").trim(),
       tone: (body.tone ?? "friendly").trim(),
       avatar_url: null,
@@ -249,18 +254,37 @@ export async function handleOnboarding(req: Request): Promise<Response> {
   // integrations has a unique (tenant_id, provider) key. Use PostgREST upsert
   // semantics so retries update the same integration rather than failing or
   // creating another row.
-  const integrations = Array.isArray(body.integrations) ? body.integrations : [];
+  const integrations = Array.isArray(body.integrations) ? body.integrations as WizardIntegration[] : [];
   for (const integ of integrations) {
-    if ((integ.provider === "woocommerce" || integ.provider === "supabase") && integ.credentials) {
+    if ((integ.provider === "woocommerce" || integ.provider === "supabase") && integ.credentials && typeof integ.credentials === "object") {
+      const raw = integ.credentials as Record<string, unknown>;
+      let credentials: Record<string, unknown>;
+      if (integ.provider === "woocommerce") {
+        const url = String(raw.url ?? "").trim();
+        const key = String(raw.consumer_key ?? "").trim();
+        const secret = String(raw.consumer_secret ?? "").trim();
+        if (!url || !key || !secret) throw new DashboardError("WooCommerce URL, consumer key and consumer secret are required");
+        credentials = {
+          url,
+          consumer_key: await encryptSecret(key),
+          consumer_secret: await encryptSecret(secret),
+          webhook_secret: raw.webhook_secret ? await encryptSecret(String(raw.webhook_secret)) : undefined,
+        };
+      } else {
+        const url = String(raw.url ?? "").trim();
+        const anonKey = String(raw.anon_key ?? "").trim();
+        if (!url || !anonKey) throw new DashboardError("Supabase project URL and anon key are required");
+        credentials = {
+          url,
+          anon_key: await encryptSecret(anonKey),
+          query_policy: raw.query_policy && typeof raw.query_policy === "object" ? raw.query_policy : undefined,
+          capability_config: raw.capability_config && typeof raw.capability_config === "object" ? raw.capability_config : undefined,
+        };
+      }
       const res = await fetch(`${base}/integrations?on_conflict=tenant_id,provider`, {
         method: "POST",
         headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify({
-          tenant_id: tenantId,
-          provider: integ.provider,
-          credentials: integ.credentials,
-          active: true,
-        }),
+        body: JSON.stringify({ tenant_id: tenantId, provider: integ.provider, credentials, active: true }),
       });
       if (!res.ok) throw new DashboardError(`Failed to save ${integ.provider} integration`, 502);
     }

@@ -1,22 +1,10 @@
 import type { CartItem, Order, OrderPatch, Product, ProductVariant, SalesSummary, InventoryItem, AnalyticsReport, Tenant } from "./types.ts";
-import { IVY_PEARLS_CATALOGUE, IVY_PEARLS_CATEGORIES, IVY_PEARLS_ORDERS } from "./mock-data.ts";
 
 // Statuses an order must be in for a customer-facing change to be allowed.
 export const CANCELLABLE_STATUSES = ["pending", "processing", "on-hold"];
 export const MODIFIABLE_STATUSES = ["pending", "processing", "on-hold"];
 export const REFUNDABLE_STATUSES = ["processing", "completed", "on-hold"];
 export const VALID_STATUSES = ["pending", "processing", "on-hold", "completed", "cancelled", "refunded", "failed", "trash"];
-
-// Mutable copy of seed orders so demo changes (cancel/modify/refund) persist
-// for the process lifetime in mock mode.
-let MOCK_ORDERS: Order[] = IVY_PEARLS_ORDERS.map((o) => ({ ...o, items: o.items.map((i) => ({ ...i })) }));
-
-function setMockOrderStatus(orderId: string, status: string): Order {
-  const order = MOCK_ORDERS.find((o) => o.id === orderId);
-  if (!order) return { id: orderId, customerEmail: "", status, total: 0, currency: "GBP", items: [], date: "" };
-  order.status = status;
-  return { ...order };
-}
 
 function periodParam(days?: number): string {
   if (days === undefined || days === 7) return "week";
@@ -333,194 +321,6 @@ export class WooCommerceClient implements WooClient {
 }
 
 // ---------------------------------------------------------------------------
-// Mock WooCommerce (dev/demo when no credentials configured)
-// ---------------------------------------------------------------------------
-
-function singularize(w: string): string {
-  if (w.length > 4 && w.endsWith("ies")) return w.slice(0, -3) + "y";
-  if (w.length > 3 && w.endsWith("es") && !w.endsWith("ces")) return w.slice(0, -2);
-  if (w.length > 3 && w.endsWith("s")) return w.slice(0, -1);
-  return w;
-}
-
-export class MockWooClient implements WooClient {
-  constructor(private products: Product[] = IVY_PEARLS_CATALOGUE) {}
-
-
-  // Module-level mutable order store so cancel/modify/refund persist across
-  // tool calls within the same process (demo mode).
-  private static mutableOrders: Order[] = IVY_PEARLS_ORDERS.map((o) => ({ ...o, items: [...o.items] }));
-
-  async searchProducts(opts: {
-    query?: string;
-    maxPrice?: number;
-    minPrice?: number;
-    category?: string;
-    attributes?: Record<string, string>;
-  }): Promise<Product[]> {
-    let out = this.products;
-    if (opts.query) {
-      // Like WooCommerce full-text search: every word must match somewhere
-      // in name, category or description (stop words ignored).
-      const words = opts.query
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((w) => w.length > 2 && !["the", "and", "for", "looking", "with", "have", "any", "some", "got"].includes(w))
-        .map(singularize);
-      if (words.length) {
-        out = out.filter((p) => {
-          const hay = `${p.name} ${p.category ?? ""} ${p.description ?? ""}`.toLowerCase();
-          return words.every(
-            (w) => hay.includes(w) || (w.length > 3 && w.endsWith("s") && hay.includes(w.slice(0, -1))),
-          );
-        });
-      }
-    }
-    if (opts.maxPrice !== undefined) out = out.filter((p) => p.price <= opts.maxPrice!);
-    if (opts.minPrice !== undefined) out = out.filter((p) => p.price >= opts.minPrice!);
-    if (opts.category) {
-      const c = opts.category.toLowerCase();
-      out = out.filter((p) => (p.category ?? "").toLowerCase().includes(c));
-    }
-    for (const [name, term] of Object.entries(opts.attributes ?? {})) {
-      const t = term.toLowerCase();
-      out = out.filter((p) => (p.attributes?.[name] ?? "").toLowerCase().includes(t));
-    }
-    return out.slice(0, 6);
-  }
-
-  async getProduct(id: string | number): Promise<Product | null> {
-    const found = this.products.find((p) => String(p.id) === String(id));
-    return found ? structuredClone(found) : null;
-  }
-
-  async getVariants(productId: string | number): Promise<ProductVariant[]> {
-    const product = await this.getProduct(productId);
-    return product?.variants ?? [];
-  }
-
-  async checkStock(productId: string | number, variantId?: string): Promise<StockResult | null> {
-    const product = await this.getProduct(productId);
-    if (!product) return null;
-    if (variantId) {
-      const variant = product.variants?.find((v) => v.id === String(variantId));
-      if (!variant) return { product, inStock: false };
-      return { product, variant, inStock: variant.inStock };
-    }
-    return { product, inStock: product.inStock !== false };
-  }
-
-  async getCategories(): Promise<WooCategory[]> {
-    return IVY_PEARLS_CATEGORIES;
-  }
-
-  async trackOrder(opts: { orderId?: string; email?: string }): Promise<Order[]> {
-    const email = (opts.email ?? "").trim().toLowerCase();
-    if (!email) return [];
-    let out = MOCK_ORDERS.filter((o) => o.customerEmail.trim().toLowerCase() === email);
-    if (opts.orderId) out = out.filter((o) => o.id === opts.orderId);
-    return out.map((o) => ({ ...o }));
-  }
-
-  async cancelOrder(opts: { orderId: string; email?: string }): Promise<Order | null> {
-    const order = findMockOrder(opts.orderId, opts.email);
-    if (!order) return null;
-    if (!CANCELLABLE_STATUSES.includes(order.status)) return cloneOrder(order);
-    order.status = "cancelled";
-    return cloneOrder(order);
-  }
-
-  async modifyOrder(opts: { orderId: string; email?: string; patch: OrderPatch }): Promise<Order | null> {
-    const { patch } = opts;
-    const order = findMockOrder(opts.orderId, opts.email);
-    if (!order) return null;
-    if (!MODIFIABLE_STATUSES.includes(order.status)) return cloneOrder(order);
-    if (patch.status && VALID_STATUSES.includes(patch.status)) order.status = patch.status;
-    return cloneOrder(order);
-  }
-
-  async refundOrder(opts: { orderId: string; email?: string; reason?: string }): Promise<Order | null> {
-    const order = findMockOrder(opts.orderId, opts.email);
-    if (!order) return null;
-    if (!REFUNDABLE_STATUSES.includes(order.status)) return cloneOrder(order);
-    order.status = "refunded";
-    return cloneOrder(order);
-  }
-
-  async salesSummary(opts: { days?: number }): Promise<SalesSummary> {
-    const orders = this.mockOrders();
-    const cutoff = cutoffDate(opts.days);
-    const recent = orders.filter((o) => new Date(o.date) >= cutoff);
-    const revenue = recent.reduce((s, o) => s + o.total, 0);
-    const items = recent.reduce((s, o) => s + o.items.reduce((a, i) => a + i.qty, 0), 0);
-    const byName = new Map<string, { units: number; revenue: number }>();
-    for (const o of recent) {
-      for (const i of o.items) {
-        const cur = byName.get(i.name) ?? { units: 0, revenue: 0 };
-        cur.units += i.qty;
-        cur.revenue += i.qty * (o.total / Math.max(1, o.items.reduce((a, x) => a + x.qty, 0)));
-        byName.set(i.name, cur);
-      }
-    }
-    return {
-      period: periodLabel(opts.days),
-      revenue,
-      orders: recent.length,
-      items,
-      avgOrderValue: recent.length ? revenue / recent.length : 0,
-      topProducts: [...byName.entries()].map(([name, v]) => ({ name, ...v })).sort((a, b) => b.revenue - a.revenue).slice(0, 5),
-    };
-  }
-
-  async inventory(): Promise<InventoryItem[]> {
-    return this.products.map((p, i) => ({
-      productId: p.id,
-      name: p.name,
-      stockQuantity: p.stockQuantity ?? (p.inStock === false ? 0 : ((i * 7) % 9) + 2),
-      inStock: p.inStock !== false,
-      category: p.category,
-    }));
-  }
-
-  async analytics(opts: { days?: number }): Promise<AnalyticsReport> {
-    const orders = this.mockOrders();
-    const cutoff = cutoffDate(opts.days);
-    const recent = orders.filter((o) => new Date(o.date) >= cutoff);
-    const byDay = new Map<string, { revenue: number; orders: number }>();
-    for (const o of recent) {
-      const day = o.date.slice(0, 10);
-      const cur = byDay.get(day) ?? { revenue: 0, orders: 0 };
-      cur.revenue += o.total;
-      cur.orders += 1;
-      byDay.set(day, cur);
-    }
-    const summary = await this.salesSummary({ days: opts.days });
-    return {
-      period: periodLabel(opts.days),
-      totalRevenue: summary.revenue,
-      totalOrders: summary.orders,
-      byDay: [...byDay.entries()].map(([date, v]) => ({ date, ...v })).sort((a, b) => a.date.localeCompare(b.date)),
-      topProducts: summary.topProducts,
-    };
-  }
-
-  private mockOrders(): Order[] {
-    return MockWooClient.mutableOrders;
-  }
-
-  async listAll(): Promise<Product[]> {
-    return structuredClone(this.products);
-  }
-
-  buildCheckoutUrl(items: CartItem[], email?: string): string {
-    const params = new URLSearchParams();
-    if (email) params.set("email", email);
-    const qs = params.toString();
-    return `https://ivyandpearls.co.uk/checkout/${qs ? "?" + qs : ""}`;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // WooCommerce JSON → internal Product/Order
 // ---------------------------------------------------------------------------
 
@@ -595,19 +395,8 @@ function wooToOrder(w: WooOrder): Order {
   };
 }
 // ---------------------------------------------------------------------------
-// Shared mock helpers
+// Date helpers
 // ---------------------------------------------------------------------------
-
-function findMockOrder(orderId: string, email?: string): Order | undefined {
-  const order = MOCK_ORDERS.find((o) => o.id === orderId);
-  if (!order) return undefined;
-  if (email && order.customerEmail.toLowerCase() !== email.toLowerCase()) return undefined;
-  return order;
-}
-
-function cloneOrder(o: Order): Order {
-  return { ...o, items: o.items.map((i) => ({ ...i })) };
-}
 
 function cutoffDate(days?: number): Date {
   const d = new Date();
@@ -618,5 +407,3 @@ function cutoffDate(days?: number): Date {
 function daysAgoISO(days?: number): string {
   return cutoffDate(days).toISOString();
 }
-
-// ---------------------------------------------------------------------------

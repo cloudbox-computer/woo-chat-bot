@@ -11,6 +11,7 @@ import {
   refusalReply,
 } from "./policy.ts";
 import { executeTool, searchTenantWebsite, summarizeProducts, TOOL_SPECS, TOOL_PERMISSIONS } from "./tools.ts";
+import { createIntegrationRouter, toolSupported } from "./integrations/router.ts";
 import type { ChatRequest, ChatResponse, Conversation, Product, Tenant, TenantPolicy, ToolPermission } from "./types.ts";
 import { DEFAULT_CHATBOT_PERMISSIONS } from "./types.ts";
 import { redactForStorage } from "./privacy.ts";
@@ -43,27 +44,17 @@ interface TranscriptEntry {
   content: string;
 }
 
-// A tool is callable when the chatbot's permission level covers the tool's
-// group: "read" ⊂ "cart" ⊂ "support" ⊂ "sensitive" ⊂ "admin".
-const PERMISSION_LEVELS: Record<ToolPermission, number> = {
-  read: 1,
-  cart: 2,
-  support: 3,
-  sensitive: 4,
-  admin: 5,
-};
-
+// Tool permissions are explicit capability groups, not a hierarchy. A tenant
+// that enables support must not implicitly gain cart or admin tools. This is
+// essential for arbitrary-business tenants that have no commerce capability.
 function allowedToolNames(permissions: ToolPermission[]): Set<string> {
-  const maxLevel = permissions.reduce(
-    (m, p) => Math.max(m, PERMISSION_LEVELS[p] ?? 0),
-    0,
-  );
+  const granted = new Set(permissions);
   return new Set(
-    TOOL_SPECS.filter((t) => (PERMISSION_LEVELS[TOOL_PERMISSIONS[t.function.name] ?? "read"] ?? 1) <= maxLevel)
+    TOOL_SPECS
+      .filter((t) => granted.has(TOOL_PERMISSIONS[t.function.name] ?? "read"))
       .map((t) => t.function.name),
   );
 }
-
 
 async function classifyTenantScope(
   provider: AiProvider,
@@ -133,7 +124,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // Provider is also used as a cheap semantic scope classifier for ambiguous
   // tenant-specific messages. Business vocabulary remains tenant data.
   const cfg = aiConfig();
-  const provider = providerFromConfig(cfg, { name: tenant.name, retail: false });
+  const provider = providerFromConfig(cfg, { name: tenant.name });
 
   // Gate 2 — input safety / prompt injection (no AI call)
   const input = checkInputSafety(req.message);
@@ -154,7 +145,12 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     return { reply: refusalReply(policy), products: [], conversationId: priorConversationId };
   }
 
-  const allowed = allowedToolNames(chatbot.permissions ?? DEFAULT_CHATBOT_PERMISSIONS);
+  const permissionAllowed = allowedToolNames(chatbot.permissions ?? DEFAULT_CHATBOT_PERMISSIONS);
+  const integrationRouter = createIntegrationRouter(tenant);
+  // A model tool is visible only when BOTH the chatbot permission policy and
+  // a connected/provider-backed capability allow it. The model never sees the
+  // provider name and therefore never needs to know where the data lives.
+  const allowed = new Set([...permissionAllowed].filter((name) => toolSupported(integrationRouter, name)));
   const tools = TOOL_SPECS.filter((t) => allowed.has(t.function.name));
   if (tools.length === 0) {
     throw new AgentError("This chatbot has no tools enabled", 500);
@@ -230,7 +226,11 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     return { reply: emailRequestReply(tenant), products: [], conversationId };
   }
 
-  const system = buildSystemPrompt(tenant, policy);
+  const system = buildSystemPrompt(
+    tenant,
+    policy,
+    chatbot.name
+  );
 
   // Flattened transcript: stored history first, then the new message last so
   // the model never loses it after a tool round-trip.
@@ -249,9 +249,9 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   let products: Product[] = [];
   let toolTurns = 0;
   let echoRecoveries = 0;
-  // Deterministic cart-op routing: at most one forced tool call per request.
+  // Deterministic authoritative-capability routing: at most one forced tool call per request.
   let deterministicRouted = false;
-  // Store-info refusal recovery: the store's own website content is seeded
+  // Tenant-info refusal recovery: the tenant's own website content is seeded
   // deterministically, so if the model still refuses, nudge it once (bounded).
   let storeInfoRefusalRetried = false;
 
@@ -309,10 +309,9 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     }
 
     // No tool call and the model hasn't already run a tool this request.
-    // Small models sometimes answer cart questions from memory instead of
-    // calling the tool. For a few unambiguous cart operations, fall back to a
-    // deterministic tool call so the reply always reflects the persisted
-    // cart. Guarded to run at most once so it can never loop.
+    // Small models sometimes answer authoritative-data questions from memory instead of
+    // calling the tool. For unambiguous catalogue/cart operations, force a
+    // provider-neutral capability call so the reply is grounded in connected data. Guarded to run at most once so it can never loop.
     if (!deterministicRouted && toolTurns === 0) {
       const forced = detectDeterministicTool(req.message, allowed);
       if (forced) {
@@ -331,7 +330,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     }
 
     // Store-info questions (delivery times, returns, care, FAQ…) are seeded
-    // deterministically with the store's OWN website content, so the answer
+    // deterministically with the tenant's OWN website content, so the answer
     // must not be a refusal. A flash model occasionally echoes the fixed
     // refusal (e.g. when a KB entry says "not stored here — never invent").
     // Detect that and nudge it once to answer from the provided content.
@@ -340,7 +339,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
       transcript.push({
         role: "user",
         content:
-          "The store's own website content containing the answer has already been provided to you in the system message. Answer the customer's question directly using ONLY that content. Do not refuse — give the answer now.",
+          "The tenant's own website content containing the answer has already been provided to you in the system message. Answer the customer's question directly using ONLY that content. Do not refuse — give the answer now.",
       });
       continue;
     }
@@ -388,15 +387,37 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
  * message. This is a prompt-level layer — the hard enforcement is the policy
  * engine (gates 2/3/5) that runs in this function regardless of the prompt.
  */
-function buildSystemPrompt(tenant: Tenant, policy: TenantPolicy): string {
+function buildSystemPrompt(
+  tenant: Tenant,
+  policy: TenantPolicy,
+  assistantName?: string
+): string {
   const name = tenant.name;
+  const botName = (assistantName ?? "").trim();
+  const identity = botName
+    ? `Your customer-facing assistant name is "${botName}".`
+    : `You do not have a customer-facing personal name. Refer to yourself only as the customer service assistant for ${name}.`;
+
   const topics = policy.allowedTopics.join(", ");
   const tone = tenant.tone || "friendly, helpful, concise";
+
   return [
     `You are the customer service assistant for ${name}.`,
+    identity,
     "",
-    `Your ONLY purpose is to assist customers with ${name} using the tenant scope, knowledge, connected tools and information explicitly supplied by the system.`,
+    "IDENTITY RULES:",
+    `- You represent ${name} only.`,
+    botName
+      ? `- Your ONLY customer-facing personal name is "${botName}". Never use any other name for yourself.`
+      : `- You have no personal assistant name. Do not invent one.`,
+    "- Never identify yourself using the name of the underlying AI model, provider, platform, SDK, API or infrastructure.",
+    "- Internal provider/model names are implementation details and must never be exposed to customers.",
+    "- Never mention Agnes, OpenAI, ChatGPT, Gemini, Anthropic, Claude or any other underlying model/provider as your identity.",
+    "- Never claim that your name is an underlying model or provider name.",
+    "- If asked 'who are you?' or 'what is your name?', answer only using the tenant's customer-facing identity.",
+    `- If asked what AI/model/provider powers you, say only: "I'm the virtual assistant for ${name}."`,
     "",
+    `Your ONLY purpose is to assist customers with ${name} using the tenant scope, knowledge, connected tools and information explicitly supplied by the system.`,    
     `You may help with these permitted topics: ${topics}.`,
     tenant.businessContext ? `Business context: ${tenant.businessContext}` : "",
     "",
@@ -425,12 +446,14 @@ function buildSystemPrompt(tenant: Tenant, policy: TenantPolicy): string {
     "- If a tool returns nothing, say so honestly rather than inventing an answer.",
     "- Keep replies concise and in British English unless the tenant context clearly requires another style.",
     "- Format replies with Markdown where it improves readability.",
-    tenant.wooUrl ? [
-      "Commerce tools are connected for this tenant:",
-      "- Use product/order/cart tools for live catalogue, price, stock, cart and order facts.",
-      "- Never invent prices, stock levels, product details or order statuses.",
-      "- Order cancellations, refunds and modifications are handled by the human support team unless an explicitly enabled tool permits the action.",
-    ].join("\n") : "",
+    "AUTHORITATIVE CONNECTED-DATA RULES:",
+    "- Tools represent business capabilities, not vendors. Never mention or infer which provider, database, commerce platform, CRM or API implements a tool.",
+    "- For product/catalogue questions, product names, prices, stock, variants, URLs and images may ONLY come from product tool results from the current request/conversation context.",
+    "- For order questions, order numbers, status, totals, items and dates may ONLY come from order tool results.",
+    "- For customer-specific records, use the available business-data capability; never invent records or implementation details.",
+    "- If an authoritative tool is unavailable or returns no records, say so. Never fabricate an example and present it as tenant data.",
+    "- Never construct product URLs, image URLs, SKUs, prices, order states or customer records yourself.",
+    "- Do not tell the customer whether a capability is backed by WooCommerce, Supabase, Shopify, a custom API, or any other provider.",
     "",
     "Support tickets (create_ticket):",
     "- Raise a ticket only for a genuine issue that needs human help, a complaint, or an explicit request to speak to the tenant's team.",
@@ -447,14 +470,6 @@ function buildSystemPrompt(tenant: Tenant, policy: TenantPolicy): string {
     "- If a customer asks to see, correct or delete their personal data, explain their rights and offer to raise a ticket for the support team to process it — never refuse, and never delete data yourself.",
     "- Never use a customer's personal data for anything other than helping them.",
     "",
-    tenant.supabaseUrl ? [
-      "Custom database access:",
-      `- A Supabase database is connected for this tenant. Use the query_supabase_table tool to look up customer-specific data (orders, bookings, subscriptions, etc.) when relevant.`,
-      `- ALWAYS filter by the customer's email when looking up their own records (e.g. { email: 'customer@example.com' }).`,
-      `- NEVER attempt to write, update, or delete data — the tool is read-only.`,
-      `- When presenting results, summarise the relevant data in plain language rather than pasting raw table dumps.`,
-      `- If the query returns no rows, tell the customer honestly that no matching records were found.`,
-    ].join("\n") : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -484,7 +499,7 @@ async function seedKnowledge(
     try {
       const res = await searchTenantWebsite(tenant, { query: message }, { limit: 2 });
       if (res.ok && res.text) {
-        parts.push(`Store website (the store's own site — use this as authoritative):\n${res.text}`);
+        parts.push(`Tenant website (the tenant's own site — use this as authoritative):\n${res.text}`);
         websiteSeeded = true;
       }
     } catch {
@@ -503,6 +518,14 @@ async function seedKnowledge(
  */
 function detectDeterministicTool(message: string, toolNames: Set<string>) {
   const m = message.trim().toLowerCase();
+  // Catalogue data is authoritative. For clear list/browse/find product intents,
+  // force the provider-neutral catalogue capability if the model failed to call it.
+  if (
+    toolNames.has("search_products") &&
+    /\b(list|show|browse|find|search|see|what|which|have|sell|stock|available)\b[^\n]{0,80}\b(products?|items?|catalogue|catalog|range|collection|stock)\b|\b(all|your) products?\b|\bwhat do you sell\b/.test(m)
+  ) {
+    return { name: "search_products" as const, arguments: {} as Record<string, unknown> };
+  }
   if (
     /(what('?s| is| are)? in my (cart|basket)|show (me )?(my )?(cart|basket)|view (my )?(cart|basket)|cart contents|basket contents)/.test(m) &&
     toolNames.has("view_cart")
@@ -525,7 +548,7 @@ function looksLikeToolCallEcho(text: string): boolean {
 
 /**
  * True when the model echoed the fixed refusal (or a refusal-style reply).
- * Used to recover store-info answers — if the store's website content was
+ * Used to recover tenant-info answers — if the tenant's website content was
  * seeded, a refusal is never acceptable and we nudge the model once.
  */
 function looksLikeRefusal(text: string, policy: TenantPolicy): boolean {

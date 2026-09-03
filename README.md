@@ -1,4 +1,4 @@
-# Chatbot System — tenant-based e-commerce assistant
+# Chatbot System — provider-agnostic multi-tenant customer assistant
 
 An embeddable shopping chatbot for WordPress/WooCommerce stores, built as a
 multi-tenant platform. **Ivy & Pearls** (`ivy-pearls`, jewellery retail) is the
@@ -37,7 +37,7 @@ WordPress/WooCommerce ── small JS snippet ──▶ Chatbot widget (React)
 
 ## The agent has tools, not just chat
 
-The assistant doesn't guess — it calls the store's real APIs and answers from
+The assistant doesn't guess — it calls the tenant's connected authoritative capabilities and answers from
 the results:
 
 | Tool | Customer says | What happens |
@@ -102,9 +102,10 @@ functions — bypasses RLS, so RLS is defense-in-depth against direct API access
 - **AI provider is pluggable.** `OpenAICompatibleProvider` handles OpenAI and
   Gemini via the same function-calling protocol; `MockProvider` makes the
   whole flow run offline for tests and demos. No hard-coded model.
-- **WooCommerce client with mock mode.** `WooCommerceClient` hits the real
-  REST API when credentials exist; `MockWooClient` mirrors the Ivy & Pearls
-  catalogue so the demo works before real keys are in place.
+- **Provider-neutral integration capabilities.** The AI calls business tools
+  such as `search_products`, `track_order` and `search_business_data`. A server-side
+  capability router selects the connected provider adapter. Production never falls
+  back to a fabricated catalogue when a provider is missing.
 - **DB layer is swappable.** `MemoryDb` for tests/dev, `PostgrestDb` for
   Supabase. Same interface.
 

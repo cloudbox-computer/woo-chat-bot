@@ -14,6 +14,7 @@ const proc = Bun.spawn(cmd, {
   stdout: "inherit",
   stderr: "inherit",
   cwd: import.meta.dir + "/..",
+  env: { ...process.env, AI_PROVIDER: "mock", DATABASE: "memory" },
 });
 const code = await proc.exited;
 process.exit(code);

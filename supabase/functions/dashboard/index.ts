@@ -560,6 +560,75 @@ async function assertKnowledgeOwnership(ctx: Awaited<ReturnType<typeof resolveDa
 // ---------------------------------------------------------------------------
 // integrations
 // ---------------------------------------------------------------------------
+const INTEGRATION_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function validateSupabaseCapabilityConfig(value: unknown): Record<string, unknown> | undefined {
+  if (value == null) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new DashboardError("Capability mapping must be a JSON object");
+  const cfg = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const capability of ["catalogue", "orders"] as const) {
+    const raw = cfg[capability];
+    if (raw == null) continue;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new DashboardError(`${capability} capability mapping must be an object`);
+    const map = raw as Record<string, unknown>;
+    const table = String(map.table ?? "").trim();
+    if (!INTEGRATION_IDENT_RE.test(table)) throw new DashboardError(`${capability}.table must be a valid table identifier`);
+    const fieldsRaw = map.fields;
+    const fields: Record<string, string> = {};
+    if (fieldsRaw != null) {
+      if (!fieldsRaw || typeof fieldsRaw !== "object" || Array.isArray(fieldsRaw)) throw new DashboardError(`${capability}.fields must be an object`);
+      for (const [logical, physical] of Object.entries(fieldsRaw as Record<string, unknown>)) {
+        if (!INTEGRATION_IDENT_RE.test(logical) || !INTEGRATION_IDENT_RE.test(String(physical ?? ""))) {
+          throw new DashboardError(`${capability}.fields contains an invalid identifier`);
+        }
+        fields[logical] = String(physical);
+      }
+    }
+    const entry: Record<string, unknown> = { table };
+    if (Object.keys(fields).length) entry.fields = fields;
+    if (typeof map.preferred === "boolean") entry.preferred = map.preferred;
+    if (typeof map.public === "boolean") entry.public = map.public;
+    if (map.identityColumn != null) {
+      const identityColumn = String(map.identityColumn).trim();
+      if (!INTEGRATION_IDENT_RE.test(identityColumn)) throw new DashboardError(`${capability}.identityColumn must be a valid identifier`);
+      entry.identityColumn = identityColumn;
+    }
+    if (map.maxRows != null) {
+      const maxRows = Number(map.maxRows);
+      if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100) throw new DashboardError(`${capability}.maxRows must be an integer from 1 to 100`);
+      entry.maxRows = maxRows;
+    }
+    out[capability] = entry;
+  }
+  return out;
+}
+
+function validateSupabaseQueryPolicy(value: unknown): Record<string, unknown> | undefined {
+  if (value == null) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new DashboardError("Business-data policy must be a JSON object");
+  const tablesRaw = (value as Record<string, unknown>).tables;
+  if (!tablesRaw || typeof tablesRaw !== "object" || Array.isArray(tablesRaw)) throw new DashboardError("Business-data policy requires a tables object");
+  const tables: Record<string, unknown> = {};
+  for (const [resource, raw] of Object.entries(tablesRaw as Record<string, unknown>)) {
+    if (!INTEGRATION_IDENT_RE.test(resource)) throw new DashboardError(`Business-data resource '${resource}' is not a valid identifier`);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new DashboardError(`Business-data resource '${resource}' must be an object`);
+    const item = raw as Record<string, unknown>;
+    const physicalTable = item.table == null ? resource : String(item.table).trim();
+    if (!INTEGRATION_IDENT_RE.test(physicalTable)) throw new DashboardError(`Business-data resource '${resource}' has an invalid table`);
+    if (!Array.isArray(item.columns) || !item.columns.length) throw new DashboardError(`Business-data resource '${resource}' requires a non-empty columns array`);
+    const columns = item.columns.map(String);
+    if (columns.some((c) => !INTEGRATION_IDENT_RE.test(c))) throw new DashboardError(`Business-data resource '${resource}' contains an invalid column`);
+    const identityColumn = String(item.identityColumn ?? "").trim();
+    if (!INTEGRATION_IDENT_RE.test(identityColumn) || !columns.includes(identityColumn)) throw new DashboardError(`Business-data resource '${resource}' identityColumn must be included in columns`);
+    const orderColumns = Array.isArray(item.orderColumns) ? item.orderColumns.map(String) : [];
+    if (orderColumns.some((c) => !columns.includes(c))) throw new DashboardError(`Business-data resource '${resource}' orderColumns must be included in columns`);
+    const maxRows = item.maxRows == null ? 20 : Number(item.maxRows);
+    if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 50) throw new DashboardError(`Business-data resource '${resource}' maxRows must be an integer from 1 to 50`);
+    tables[resource] = { table: physicalTable, columns, identityColumn, orderColumns, maxRows };
+  }
+  return { tables };
+}
 async function actionGetIntegrations(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>) {
   const c = client();
   const rows = await getRows(c, "integrations", {
@@ -575,15 +644,43 @@ async function actionGetIntegrations(ctx: Awaited<ReturnType<typeof resolveDashb
         active: r.active === true,
         configured: provider === "resend"
           ? !!creds.api_key && !!creds.from_email
-          : !!creds.url,
+          : provider === "woocommerce"
+            ? !!creds.url && !!creds.consumer_key && !!creds.consumer_secret
+            : provider === "supabase"
+              ? !!creds.url && !!creds.anon_key
+              : false,
         // Never return secrets. Only safe connection metadata is exposed.
         url: provider === "resend" ? null : (creds.url ?? null),
         fromEmail: provider === "resend" ? (creds.from_email ?? null) : null,
         fromName: provider === "resend" ? (creds.from_name ?? null) : null,
         hasApiKey: provider === "resend" ? !!creds.api_key : undefined,
+        // Safe, non-secret provider-neutral capability configuration.
+        capabilityConfig: provider === "supabase" && creds.capability_config && typeof creds.capability_config === "object" ? creds.capability_config : null,
+        queryPolicy: provider === "supabase" && creds.query_policy && typeof creds.query_policy === "object" ? creds.query_policy : null,
+        capabilities: provider === "woocommerce"
+          ? ["catalogue.read", "orders.read", "orders.write", "checkout.create", "inventory.read", "analytics.read"]
+          : provider === "supabase"
+            ? [
+                ...(creds.query_policy ? ["business_data.read"] : []),
+                ...(((creds.capability_config as Record<string, unknown> | undefined)?.catalogue) ? ["catalogue.read"] : []),
+                ...(((creds.capability_config as Record<string, unknown> | undefined)?.orders) ? ["orders.read"] : []),
+              ]
+            : provider === "resend" ? ["email.send"] : [],
       };
     }),
   });
+}
+
+async function ensureTenantChatbotPermission(tenantId: string, permission: string): Promise<void> {
+  const c = client();
+  const bots = await getRows(c, "chatbots", { select: "id,config", tenant_id: `eq.${tenantId}` });
+  for (const bot of bots) {
+    const config = bot.config && typeof bot.config === "object" ? { ...(bot.config as Record<string, unknown>) } : {};
+    const raw = Array.isArray(config.permissions) ? config.permissions.filter((p): p is string => typeof p === "string") : ["read", "support"];
+    if (!raw.includes(permission)) raw.push(permission);
+    config.permissions = Array.from(new Set(raw));
+    await write(c, "PATCH", `chatbots?id=eq.${encodeURIComponent(String(bot.id))}`, { config });
+  }
 }
 
 async function actionUpdateIntegration(
@@ -620,10 +717,18 @@ async function actionUpdateIntegration(
     if (!creds.url) {
       throw new DashboardError("Supabase project URL is required (e.g. https://xyz.supabase.co)");
     }
+    const previous = ((existing[0]?.credentials ?? {}) as Record<string, unknown>);
+    const queryPolicy = creds.query_policy !== undefined
+      ? validateSupabaseQueryPolicy(creds.query_policy)
+      : (previous.query_policy as Record<string, unknown> | undefined);
+    const capabilityConfig = creds.capability_config !== undefined
+      ? validateSupabaseCapabilityConfig(creds.capability_config)
+      : (previous.capability_config as Record<string, unknown> | undefined);
     credentialData = {
       url: String(creds.url),
-      anon_key: creds.anon_key ? await encryptSecret(String(creds.anon_key)) : (((existing[0]?.credentials ?? {}) as Record<string, unknown>).anon_key ?? undefined),
-      query_policy: creds.query_policy && typeof creds.query_policy === "object" ? creds.query_policy : ((((existing[0]?.credentials ?? {}) as Record<string, unknown>).query_policy) ?? undefined),
+      anon_key: creds.anon_key ? await encryptSecret(String(creds.anon_key)) : (previous.anon_key ?? undefined),
+      query_policy: queryPolicy,
+      capability_config: capabilityConfig,
     };
   } else {
     const fromEmail = String(creds.from_email ?? "").trim();
@@ -650,6 +755,9 @@ async function actionUpdateIntegration(
       active: true,
     });
   }
+  // WooCommerce is currently the checkout-capable adapter. Granting cart is
+  // explicit and does not imply support/admin/sensitive permissions.
+  if (provider === "woocommerce") await ensureTenantChatbotPermission(ctx.tenantId, "cart");
   await audit(ctx, "integration.updated", "integration", provider, { provider });
   return json({ ok: true });
 }

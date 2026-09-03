@@ -8,7 +8,7 @@ This branch contains a security-focused production hardening pass.
 - Order mutation tools require the verified conversation email and cannot trust an LLM-supplied identity.
 - Ticket status requires the verified conversation email.
 - Customer Supabase querying fails closed unless an explicit table/column/identity allowlist is configured.
-- `query_supabase_table` is an admin-level tool, not a default public chatbot capability.
+- Provider-specific database tools are not exposed to the model. `search_business_data` is provider-neutral and is fail-closed behind tenant-configured resource policies plus verified customer identity.
 - Dashboard RBAC: viewer (read), agent (ticket updates), admin (config/knowledge), owner (integrations).
 - Tenant membership RLS is owner-managed to prevent role escalation.
 - Public chat conversations use an HMAC-signed session token; a UUID alone is no longer sufficient.

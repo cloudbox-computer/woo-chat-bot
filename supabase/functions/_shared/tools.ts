@@ -1,11 +1,12 @@
 import type { CartItem, Order, Product, Tenant, Ticket, TicketCategory, ToolPermission } from "./types.ts";
 import { TICKET_CATEGORIES } from "./types.ts";
 import type { ToolSpec } from "./ai.ts";
-import { MockWooClient, WooCommerceClient, type WooClient } from "./woo.ts";
 import { enqueueJob } from "./jobs.ts";
 import { claimIdempotency, completeIdempotency, idempotencyKey, releaseIdempotency } from "./idempotency.ts";
 import type { Db } from "./db.ts";
 import { env } from "./env.ts";
+import { createIntegrationRouter, toolSupported } from "./integrations/router.ts";
+import { CapabilityUnavailableError } from "./integrations/types.ts";
 
 export interface ToolContext {
   tenant: Tenant;
@@ -36,7 +37,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     function: {
       name: "search_products",
       description:
-        "Search the store catalogue by keywords, price range, category and attributes (colour, material). Use for 'do you have…', 'show me…', 'looking for…'.",
+        "Search the tenant's connected product catalogue by keywords, price range, category and attributes. The tool routes to whichever authoritative catalogue integration is configured. Use for product listing, browsing, availability and discovery requests.",
       parameters: {
         type: "object",
         properties: {
@@ -88,7 +89,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     function: {
       name: "search_knowledge",
       description:
-        "Search the store knowledge base (policies, care guides, materials, shipping, returns, warranty). Use for questions like 'is it waterproof?', 'what's your returns policy?', 'how long does delivery take?'.",
+        "Search the tenant's curated knowledge base for authoritative business facts, policies, services and guidance.",
       parameters: {
         type: "object",
         properties: {
@@ -103,7 +104,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     function: {
       name: "search_website",
       description:
-        "Search the store's OWN website (WordPress) for information not covered by the knowledge base: delivery times, returns policy, care & cleaning guides, size guide, FAQ, contact details. Use when the knowledge base has no answer for a store question. This tool can only ever access the store's own website.",
+        "Search the tenant's OWN configured website for authoritative information not covered by the knowledge base. This tool can only access the tenant's own website.",
       parameters: {
         type: "object",
         properties: {
@@ -290,7 +291,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     function: {
       name: "sales_summary",
       description:
-        "Store-owner tool: revenue and order totals for a period (default last 7 days). Never use this to answer customer questions.",
+        "Business-owner tool: revenue and order totals for a period (default last 7 days). Never use this to answer ordinary customer questions.",
       parameters: {
         type: "object",
         properties: { days: { type: "number", description: "Days to look back, default 7" } },
@@ -302,7 +303,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     function: {
       name: "inventory",
       description:
-        "Store-owner tool: current stock levels and out-of-stock items. Never use this to answer customer questions.",
+        "Business-owner tool: current stock levels and out-of-stock items. Never use this to answer ordinary customer questions.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -311,7 +312,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     function: {
       name: "analytics",
       description:
-        "Store-owner tool: revenue and top products over a period (default last 7 days). Never use this to answer customer questions.",
+        "Business-owner tool: revenue and top products over a period (default last 7 days). Never use this to answer ordinary customer questions.",
       parameters: {
         type: "object",
         properties: { days: { type: "number", description: "Days to look back, default 7" } },
@@ -321,27 +322,20 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     type: "function",
     function: {
-      name: "query_supabase_table",
+      name: "search_business_data",
       description:
-        "QUERY YOUR OWN DATABASE — Read data from your connected Supabase project. Use when the customer asks about orders, customers, inventory, bookings, subscriptions, or any custom data stored in their own database. The assistant can list tables, inspect schema, and run read-only queries with filters/sorting/limiting. NEVER use this to write or modify data — it is read-only. Always prefer filtering by the customer's email if available to return only their records.",
+        "Read customer-specific or operational data from a tenant-configured business-data resource. Use logical resource names such as bookings, subscriptions, invoices or customer_records. The integration router chooses the connected provider; never ask for or mention database tables, SQL, Supabase or provider-specific implementation details.",
       parameters: {
         type: "object",
         properties: {
-          table: { type: "string", description: "The table name to query, e.g. 'orders', 'customers', 'bookings'" },
-          filters: {
-            type: "object",
-            description: "Filter conditions as key-value pairs. e.g. { email: 'customer@example.com' }, { status: 'pending' }"
-          },
-          columns: {
-            type: "array",
-            items: { type: "string" },
-            description: "Columns to return. Leave empty for all columns. e.g. ['id', 'status', 'created_at']"
-          },
-          order_by: { type: "string", description: "Column to sort by, e.g. 'created_at'" },
-          order_direction: { type: "string", enum: ["asc", "desc"], description: "Sort direction, default desc for recent-first" },
-          limit: { type: "number", description: "Max rows to return (default 50, max 200)" },
+          resource: { type: "string", description: "Logical business resource enabled by the tenant, e.g. bookings, invoices, subscriptions" },
+          filters: { type: "object", description: "Additional business filters as key-value pairs" },
+          fields: { type: "array", items: { type: "string" }, description: "Optional permitted fields to return" },
+          orderBy: { type: "string", description: "Optional permitted field to sort by" },
+          orderDirection: { type: "string", enum: ["asc", "desc"] },
+          limit: { type: "number", description: "Maximum records to return within the tenant policy" },
         },
-        required: ["table"],
+        required: ["resource"],
       },
     },
   },
@@ -368,7 +362,7 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
   sales_summary: "admin",
   inventory: "admin",
   analytics: "admin",
-  query_supabase_table: "admin",
+  search_business_data: "read",
 };
 
 // ---------------------------------------------------------------------------
@@ -379,10 +373,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
   if (ctx.allowed && !ctx.allowed.has(name)) {
     return { ok: false, text: `Tool ${name} is not enabled for this chatbot.` };
   }
-  const woo = wooClientFor(ctx.tenant);
+  const router = createIntegrationRouter(ctx.tenant);
+  if (!toolSupported(router, name)) {
+    return { ok: false, text: "That capability is not connected or enabled for this business." };
+  }
   switch (name) {
     case "search_products": {
-      const products = await woo.searchProducts({
+      const products = await router.requireCatalogue().searchProducts({
         query: asStr(args.query),
         maxPrice: asNum(args.maxPrice),
         minPrice: asNum(args.minPrice),
@@ -394,7 +391,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
     }
     case "get_product": {
       const id = args.id as string | number;
-      const p = await woo.getProduct(id);
+      const p = await router.requireCatalogue().getProduct(id);
       if (!p) return { ok: false, text: "Product not found." };
       return { ok: true, text: describeProduct(p, ctx.tenant.currency), products: [p] };
     }
@@ -404,14 +401,14 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       if (!verifiedEmail || !suppliedEmail || suppliedEmail.toLowerCase() !== verifiedEmail.toLowerCase()) {
         return { ok: false, text: "I need the same customer email you provided in this chat to verify that order." };
       }
-      const orders = await woo.trackOrder({ orderId: asStr(args.orderId), email: verifiedEmail });
+      const orders = await router.requireOrders().trackOrder({ orderId: asStr(args.orderId), email: verifiedEmail });
       if (!orders.length) return { ok: false, text: "No order found. Check the order number or the email used at checkout." };
       return { ok: true, text: orders.map(summarizeOrder).join("\n") };
     }
     case "recommend_products": {
       const occasion = asStr(args.occasion) ?? "gift";
       const budget = asNum(args.budget);
-      const products = await woo.listAll();
+      const products = await router.requireCatalogue().listProducts();
       let picks = products.filter((p) => p.inStock !== false);
       if (budget !== undefined) picks = picks.filter((p) => p.price <= budget);
       picks = picks.slice(0, 4);
@@ -437,7 +434,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
       const productId = args.productId as string | number;
       const qty = Math.max(1, Math.floor(asNum(args.quantity) ?? 1));
-      const p = await woo.getProduct(productId);
+      const p = await router.requireCatalogue().getProduct(productId);
       if (!p) return { ok: false, text: "Product not found." };
       if (p.inStock === false) return { ok: false, text: `${p.name} is currently out of stock.` };
 
@@ -445,7 +442,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       let variantName: string | undefined;
       let price = p.price;
       if (variantId) {
-        const variants = await woo.getVariants(productId);
+        const variants = await router.requireCatalogue().getVariants(productId);
         const v = variants.find((x) => x.id === variantId);
         if (!v) return { ok: false, text: `Variant '${variantId}' not found for ${p.name}.` };
         if (!v.inStock) return { ok: false, text: `${p.name} (${v.name}) is out of stock.` };
@@ -491,13 +488,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
       const cart = await ctx.db.getCart(ctx.conversationId);
       if (!cart.length) return { ok: false, text: "Your cart is empty — nothing to check out yet." };
-      const url = woo.buildCheckoutUrl(cart, ctx.customerEmail);
+      const url = await router.requireCheckout().buildCheckoutUrl(cart, ctx.customerEmail);
       return { ok: true, text: `You have ${cart.length} item${cart.length === 1 ? "" : "s"} ready to check out. Complete your order here: ${url}`, products: cartToProducts(cart) };
     }
     case "cancel_order": {
       const email = (ctx.customerEmail ?? "").trim();
       if (!email || (asStr(args.email) ?? "").trim().toLowerCase() !== email.toLowerCase()) return { ok: false, text: "Order ownership could not be verified." };
-      const order = await woo.cancelOrder({ orderId: asStr(args.orderId) ?? "", email });
+      const order = await router.requireOrders(true).cancelOrder?.({ orderId: asStr(args.orderId) ?? "", email }) ?? null;
       if (!order) return { ok: false, text: "Could not cancel that order. Check the number, or the order may already be completed or cancelled." };
       return { ok: true, text: `Order #${order.id} has been cancelled.\n${summarizeOrder(order)}` };
     }
@@ -505,7 +502,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       const email = (ctx.customerEmail ?? "").trim();
       if (!email || (asStr(args.email) ?? "").trim().toLowerCase() !== email.toLowerCase()) return { ok: false, text: "Order ownership could not be verified." };
       const patch = (args.patch ?? {}) as Record<string, unknown>;
-      const order = await woo.modifyOrder({
+      const order = await router.requireOrders(true).modifyOrder?.({
         orderId: asStr(args.orderId) ?? "",
         email,
         patch: {
@@ -519,7 +516,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
     case "refund_order": {
       const email = (ctx.customerEmail ?? "").trim();
       if (!email || (asStr(args.email) ?? "").trim().toLowerCase() !== email.toLowerCase()) return { ok: false, text: "Order ownership could not be verified." };
-      const order = await woo.refundOrder({ orderId: asStr(args.orderId) ?? "", email, reason: asStr(args.reason) });
+      const order = await router.requireOrders(true).refundOrder?.({ orderId: asStr(args.orderId) ?? "", email, reason: asStr(args.reason) });
       if (!order) return { ok: false, text: "Could not process a refund for that order. Check the number and email." };
       return { ok: true, text: `Refund requested for order #${order.id}. Our team will process it and confirm by email.\n${summarizeOrder(order)}` };
     }
@@ -609,7 +606,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       };
     }
     case "sales_summary": {
-      const s = await woo.salesSummary({ days: asNum(args.days) });
+      const reporting = router.requireReporting("analytics.read");
+      if (!reporting.salesSummary) return { ok: false, text: "Sales reporting is not available for this integration." };
+      const s = await reporting.salesSummary({ days: asNum(args.days) });
       const sym = ctx.tenant.currency === "GBP" ? "£" : ctx.tenant.currency + " ";
       const top = s.topProducts.map((t) => `- ${t.name}: ${t.units} sold, ${sym}${t.revenue.toFixed(2)}`).join("\n");
       return {
@@ -618,7 +617,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       };
     }
     case "inventory": {
-      const items = await woo.inventory();
+      const reporting = router.requireReporting("inventory.read");
+      if (!reporting.inventory) return { ok: false, text: "Inventory reporting is not available for this integration." };
+      const items = await reporting.inventory();
       const low = items.filter((i) => i.inStock && (i.stockQuantity ?? 99) <= 5);
       const out = items.filter((i) => !i.inStock);
       const lines: string[] = [];
@@ -629,7 +630,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       return { ok: true, text: lines.join("\n") };
     }
     case "analytics": {
-      const r = await woo.analytics({ days: asNum(args.days) });
+      const reporting = router.requireReporting("analytics.read");
+      if (!reporting.analytics) return { ok: false, text: "Analytics are not available for this integration." };
+      const r = await reporting.analytics({ days: asNum(args.days) });
       const sym = ctx.tenant.currency === "GBP" ? "£" : ctx.tenant.currency + " ";
       const days = r.byDay.map((d) => `- ${d.date}: ${sym}${d.revenue.toFixed(2)} (${d.orders} orders)`).join("\n");
       const top = r.topProducts.map((t) => `- ${t.name}: ${t.units} sold, ${sym}${t.revenue.toFixed(2)}`).join("\n");
@@ -638,79 +641,28 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         text: `Analytics (${r.period}):\nTotal revenue: ${sym}${r.totalRevenue.toFixed(2)} across ${r.totalOrders} orders.\nBy day:\n${days}\nTop products:\n${top}`,
       };
     }
-    case "query_supabase_table": {
-      const supabaseUrl = ctx.tenant.supabaseUrl;
-      const supabaseAnonKey = ctx.tenant.supabaseAnonKey;
-      const policy = ctx.tenant.supabaseQueryPolicy;
+    case "search_business_data": {
+      const resource = asStr(args.resource);
+      if (!resource) return { ok: false, text: "Please specify the business-data resource to search." };
       const customerEmail = (ctx.customerEmail ?? "").trim();
-      if (!supabaseUrl || !supabaseAnonKey) {
-        return { ok: false, text: "Supabase is not connected for this tenant." };
-      }
-      if (!policy?.tables || !customerEmail) {
-        return { ok: false, text: "Customer database lookup is not configured for this chatbot." };
-      }
-
-      const tableName = (args.table as string)?.trim();
-      const tablePolicy = tableName ? policy.tables[tableName] : undefined;
-      if (!tableName || !tablePolicy) {
-        return { ok: false, text: "That data source is not enabled for customer lookup." };
-      }
-
-      const allowedColumns = new Set(tablePolicy.columns.filter((c) => /^[a-zA-Z0-9_]+$/.test(c)));
-      const identityColumn = tablePolicy.identityColumn;
-      if (!allowedColumns.size || !/^[a-zA-Z0-9_]+$/.test(identityColumn)) {
-        return { ok: false, text: "Customer database lookup policy is invalid." };
-      }
-
-      const requested = Array.isArray(args.columns) ? args.columns.map(String) : [];
-      const columns = requested.length
-        ? requested.filter((c) => allowedColumns.has(c))
-        : Array.from(allowedColumns);
-      if (!columns.length) return { ok: false, text: "No permitted columns were requested." };
-
-      const params = new URLSearchParams();
-      params.set("select", columns.join(","));
-      // Mandatory server-controlled identity filter. Model arguments can only
-      // add restrictions; they can never replace or remove this boundary.
-      params.set(identityColumn, `eq.${customerEmail}`);
-
-      const filters = (args.filters as Record<string, unknown>) ?? {};
-      for (const [key, value] of Object.entries(filters)) {
-        if (key === identityColumn || !allowedColumns.has(key) || value == null) continue;
-        const strValue = String(value);
-        if (/^[a-zA-Z0-9_@.+\- ]{1,200}$/.test(strValue)) params.set(key, `eq.${strValue}`);
-      }
-
-      const orderBy = String(args.order_by ?? "");
-      const orderColumns = new Set(tablePolicy.orderColumns ?? []);
-      if (orderBy && orderColumns.has(orderBy)) {
-        params.set("order", `${orderBy}.${args.order_direction === "asc" ? "asc" : "desc"}`);
-      }
-      const configuredMax = Math.min(Math.max(1, tablePolicy.maxRows ?? 20), 50);
-      params.set("limit", String(Math.min(Math.max(1, Math.floor(asNum(args.limit) ?? configuredMax)), configuredMax)));
-
+      if (!customerEmail) return { ok: false, text: "I need the customer's verified email before I can look up customer-specific business data." };
       try {
-        const url = `${supabaseUrl.replace(/\/$/, "")}/rest/v1/${encodeURIComponent(tableName)}?${params.toString()}`;
-        const res = await fetch(url, {
-          headers: {
-            apikey: supabaseAnonKey,
-            Authorization: `Bearer ${supabaseAnonKey}`,
-            "Content-Type": "application/json",
-          },
+        const result = await router.requireBusinessData().query({
+          resource,
+          filters: args.filters && typeof args.filters === "object" ? args.filters as Record<string, unknown> : undefined,
+          fields: Array.isArray(args.fields) ? args.fields.map(String) : undefined,
+          orderBy: asStr(args.orderBy),
+          orderDirection: args.orderDirection === "asc" ? "asc" : "desc",
+          limit: asNum(args.limit),
+          customerEmail,
         });
-        if (!res.ok) return { ok: false, text: "Customer database lookup failed." };
-        const data = await res.json() as Record<string, unknown>[];
-        if (!data.length) return { ok: true, text: "No matching customer records were found." };
-        const headers = columns.slice(0, 8);
-        const rows = data.slice(0, configuredMax).map((row) =>
-          headers.map((h) => String(row[h] ?? "")).join(" | ")
-        );
-        return {
-          ok: true,
-          text: [headers.join(" | "), headers.map(() => "---").join(" | "), ...rows].join("\n"),
-        };
-      } catch {
-        return { ok: false, text: "Customer database lookup failed." };
+        if (!result.rows.length) return { ok: true, text: "No matching customer records were found." };
+        const headers = result.fields.slice(0, 8);
+        const rows = result.rows.map((row) => headers.map((h) => String(row[h] ?? "")).join(" | "));
+        return { ok: true, text: [headers.join(" | "), headers.map(() => "---").join(" | "), ...rows].join("\n") };
+      } catch (err) {
+        console.error("[search_business_data]", err);
+        return { ok: false, text: "Business-data lookup failed or that resource is not enabled." };
       }
     }
     default:
@@ -864,7 +816,7 @@ export async function searchTenantWebsite(
   opts: { limit?: number } = {},
 ): Promise<ToolResult> {
   const base = tenantWebsiteBase(tenant);
-  if (!base) return { ok: false, text: "No website is configured for this store." };
+  if (!base) return { ok: false, text: "No website is configured for this business." };
 
   const path = (args.path ?? "").trim();
   if (path) {
@@ -876,10 +828,10 @@ export async function searchTenantWebsite(
     target.search = "";
     target.hash = "";
     if (!isSameSiteOrSubdomain(target, base)) {
-      return { ok: false, text: "Blocked: that page is outside the store's website." };
+      return { ok: false, text: "Blocked: that page is outside the business website." };
     }
     const text = await fetchTenantText(target, base);
-    if (!text) return { ok: false, text: "Couldn't read that page on the store's website." };
+    if (!text) return { ok: false, text: "Couldn't read that page on the business website." };
     return { ok: true, text: text.slice(0, WEBSITE_MAX_TEXT) };
   }
 
@@ -932,7 +884,7 @@ export async function searchTenantWebsite(
   }
 
   if (!hits.length) {
-    return { ok: false, text: `Nothing found on the store's website for "${query}".` };
+    return { ok: false, text: `Nothing found on the business website for "${query}".` };
   }
 
   const chunks: string[] = [];
@@ -951,7 +903,7 @@ export async function searchTenantWebsite(
   }
 
   if (!chunks.length) {
-    return { ok: false, text: `Couldn't read any matching pages on the store's website for "${query}".` };
+    return { ok: false, text: `Couldn't read any matching pages on the business website for "${query}".` };
   }
   return { ok: true, text: chunks.join("\n\n---\n\n") };
 }
@@ -959,15 +911,6 @@ export async function searchTenantWebsite(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-export function wooClientFor(tenant: Tenant): WooClient {
-  if (tenant.wooUrl && tenant.wooKey && tenant.wooSecret) {
-    return new WooCommerceClient(tenant);
-  }
-  // Non-retail tenants (e.g. accountancy) have no product catalogue.
-  const emptyCatalogue = tenant.slug === "ntm-associates";
-  return new MockWooClient(emptyCatalogue ? [] : undefined);
-}
 
 function asStr(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;

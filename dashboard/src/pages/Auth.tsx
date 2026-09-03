@@ -55,7 +55,7 @@ export default function AuthPage() {
         <p className="sub">
           {mode === "login"
             ? "Sign in to manage your AI assistant."
-            : "One account to set up and manage your store's chatbot."}
+            : "One account to set up and manage your business chatbot."}
         </p>
         {error ? <div className="err">{error}</div> : null}
         <div className="field">

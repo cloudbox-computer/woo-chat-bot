@@ -2,7 +2,7 @@
   "name": "chatbot-system",
   "version": "0.1.0",
   "private": true,
-  "description": "Tenant-based e-commerce chatbot platform (Supabase Edge Functions + React widget). First tenant: Ivy & Pearls.",
+  "description": "Multi-tenant provider-agnostic customer assistant platform (Supabase Edge Functions + React widget).",
   "scripts": {
     "dev": "bun scripts/dev-server.ts",
     "build": "npm run build --workspace=dashboard",

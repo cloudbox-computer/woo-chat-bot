@@ -276,13 +276,14 @@ update tenants
        ticket_prefix = coalesce(ticket_prefix, 'IP')
  where slug = 'ivy-pearls';
 
-insert into chatbots (id, tenant_id, name, active, public_id)
+insert into chatbots (id, tenant_id, name, active, public_id, config)
 values (
   'ivy-pearls',
   '10000000-0000-0000-0000-000000000001',
   'Ivy & Pearls Assistant',
   true,
-  'cb_ivy_pearls'
+  'cb_ivy_pearls',
+  '{"permissions":["read","cart","support"]}'::jsonb
 )
 on conflict (id) do nothing;
 
@@ -324,13 +325,14 @@ update tenants
        ticket_prefix = coalesce(ticket_prefix, 'NTM')
  where slug = 'ntm-associates';
 
-insert into chatbots (id, tenant_id, name, active, public_id)
+insert into chatbots (id, tenant_id, name, active, public_id, config)
 values (
   'ntm-associates',
   '20000000-0000-0000-0000-000000000002',
   'NTM Associates Assistant',
   true,
-  'cb_ntm_associates'
+  'cb_ntm_associates',
+  '{"permissions":["read","support"]}'::jsonb
 )
 on conflict (id) do nothing;
 

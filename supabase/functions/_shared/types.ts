@@ -21,7 +21,7 @@ export interface TenantPolicy {
   /** Fixed refusal response returned when a request fails a gate (§10).
    *  The model is told to use exactly this when asked out of scope. */
   refusalMessage: string;
-  /** How paranoid to be. "extra-strict" is the default for retail tenants. */
+  /** How paranoid to be. "extra-strict" is available for tenants that need a tighter scope boundary. */
   securityLevel: "standard" | "strict" | "extra-strict";
   /** Send ambiguous messages to a cheap classifier model instead of
    *  defaulting to allow. Default false (deterministic rules only). */
@@ -60,7 +60,7 @@ export interface Tenant {
    *  by the assistant whenever it asks for personal data. */
   privacyPolicyUrl?: string;
   /** Supabase project URL (e.g. https://xyz.supabase.co) when connected.
-   *  Used by the query_supabase_table tool to introspect and query tenant's own DB. */
+   *  Used server-side by provider-neutral capability adapters; never exposed to the AI as a provider-specific tool. */
   supabaseUrl?: string;
   /** Supabase anon key for querying the tenant's database. Stored with integration credentials. */
   supabaseAnonKey?: string;
@@ -71,11 +71,34 @@ export interface Tenant {
    * fails closed when this is absent. Never infer access from discovered schema. */
   supabaseQueryPolicy?: {
     tables: Record<string, {
+      /** Optional physical table name. When omitted, the resource key is used. */
+      table?: string;
       columns: string[];
       identityColumn: string;
       orderColumns?: string[];
       maxRows?: number;
     }>;
+  };
+  /** Optional provider-neutral capability mapping for a connected Supabase
+   * project. This lets Supabase implement the same catalogue/order capability
+   * contracts as WooCommerce without exposing the provider to the AI. */
+  supabaseCapabilityConfig?: {
+    catalogue?: {
+      table: string;
+      fields?: Record<string, string>;
+      public?: boolean;
+      /** Prefer this provider when multiple connected integrations can satisfy catalogue.read. */
+      preferred?: boolean;
+      maxRows?: number;
+    };
+    orders?: {
+      table: string;
+      fields?: Record<string, string>;
+      identityColumn?: string;
+      /** Prefer this provider when multiple connected integrations can satisfy orders.read. */
+      preferred?: boolean;
+      maxRows?: number;
+    };
   };
 }
 
@@ -96,10 +119,9 @@ export interface Chatbot {
 
 export type ToolPermission = "read" | "cart" | "support" | "sensitive" | "admin";
 
-// Default: browse the catalogue + manage a cart + create support tickets.
-// `sensitive` (cancel/modify/refund orders) and `admin` (reports) are
-// opt-in per business.
-export const DEFAULT_CHATBOT_PERMISSIONS: ToolPermission[] = ["read", "cart", "support"];
+// Safe generic default: read tenant information and use support capabilities.
+// Commerce (`cart`), sensitive mutations and admin reporting are explicit opt-ins.
+export const DEFAULT_CHATBOT_PERMISSIONS: ToolPermission[] = ["read", "support"];
 
 export interface Conversation {
   id: string;

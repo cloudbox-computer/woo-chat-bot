@@ -171,6 +171,9 @@ export interface IntegrationItem {
   fromEmail?: string | null;
   fromName?: string | null;
   hasApiKey?: boolean;
+  capabilities?: string[];
+  capabilityConfig?: Record<string, unknown> | null;
+  queryPolicy?: Record<string, unknown> | null;
 }
 
 export interface TicketItem {
@@ -288,6 +291,8 @@ export function updateIntegration(tenantId: string, input: {
     api_key?: string;
     from_email?: string;
     from_name?: string;
+    query_policy?: Record<string, unknown> | null;
+    capability_config?: Record<string, unknown> | null;
   };
 }): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/dashboard${tenantQuery(tenantId, "integrations")}`, {

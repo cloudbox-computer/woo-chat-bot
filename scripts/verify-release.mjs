@@ -36,6 +36,14 @@ check('CI has no test failure masking', !text('.github/workflows/ci.yml').includ
 check('CodeQL enabled', fs.existsSync(path.join(root,'.github/workflows/codeql.yml')));
 check('Dependabot enabled', fs.existsSync(path.join(root,'.github/dependabot.yml')));
 check('deployment runbook exists', fs.existsSync(path.join(root,'ENTERPRISE_DEPLOYMENT.md')));
+const tools = text('supabase/functions/_shared/tools.ts');
+const router = text('supabase/functions/_shared/integrations/router.ts');
+const woo = text('supabase/functions/_shared/woo.ts');
+check('AI tool surface is provider-neutral', tools.includes('search_business_data') && !tools.includes('query_supabase_table'));
+check('capability router gates tool availability', router.includes('TOOL_CAPABILITIES') && router.includes('toolSupported'));
+check('production Woo client has no mock catalogue fallback', !woo.includes('MockWooClient') && !woo.includes('IVY_PEARLS_CATALOGUE'));
+check('integration capability architecture documented', fs.existsSync(path.join(root,'INTEGRATION_CAPABILITY_ARCHITECTURE.md')));
+
 
 // Local relative TS imports must resolve to a file.
 const sourceRoots = ['dashboard/src','widget/src','supabase/functions','scripts','tests'];

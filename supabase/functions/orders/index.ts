@@ -1,10 +1,9 @@
-// Orders edge function — POST /orders/track
+// Orders edge function — provider-agnostic order tracking.
 // Body: { chatbotId, orderId?, email? }
-// Looks up a WooCommerce order. The agent calls this through track_order;
-// this endpoint exposes it directly (e.g. for a "Track order" widget tab).
 import { handleOptions, json, serverError, readJson } from "../_shared/cors.ts";
 import { getDb } from "../_shared/db.ts";
-import { wooClientFor } from "../_shared/tools.ts";
+import { createIntegrationRouter } from "../_shared/integrations/router.ts";
+import { CapabilityUnavailableError } from "../_shared/integrations/types.ts";
 import type { Order } from "../_shared/types.ts";
 
 Deno.serve(async (req: Request) => {
@@ -20,13 +19,14 @@ Deno.serve(async (req: Request) => {
     const tenant = bot ? await db.getTenantByChatbot(bot.id) : null;
     if (!tenant) return json({ error: "No tenant for chatbot" }, 404);
 
-    const orders: Order[] = await wooClientFor(tenant).trackOrder({
+    const orders: Order[] = await createIntegrationRouter(tenant).requireOrders().trackOrder({
       orderId: typeof body.orderId === "string" ? body.orderId : undefined,
       email: typeof body.email === "string" ? body.email : undefined,
     });
     if (!orders.length) return json({ orders: [], message: "No order found" }, 404);
     return json({ orders });
   } catch (err) {
+    if (err instanceof CapabilityUnavailableError) return json({ error: "Order lookup is not connected for this tenant" }, 404);
     console.error("orders error", err);
     return serverError(err instanceof Error ? err.message : "Unknown error");
   }
