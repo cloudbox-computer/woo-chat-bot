@@ -34,14 +34,48 @@ interface DashboardShellProps {
   onTenantCreated?: (tenantId: string) => void;
 }
 
+function pageFromUrl(): Page {
+  try {
+    const value = new URLSearchParams(window.location.search).get("page");
+    return NAV.some((item) => item.id === value) ? (value as Page) : "overview";
+  } catch {
+    return "overview";
+  }
+}
+
+function ticketFromUrl(): string | null {
+  try { return new URLSearchParams(window.location.search).get("ticket"); }
+  catch { return null; }
+}
+
 export default function DashboardShell({ tenants, selectedTenantId, onTenantSelect, onTenantCreated }: DashboardShellProps) {
-  const [page, setPage] = React.useState<Page>("overview");
+  const [page, setPage] = React.useState<Page>(pageFromUrl);
+  const [linkedTicketId, setLinkedTicketId] = React.useState<string | null>(ticketFromUrl);
   const [config, setConfig] = React.useState<ConfigData | null>(null);
   const [showTenantMenu, setShowTenantMenu] = React.useState(false);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
   const [newTenantName, setNewTenantName] = React.useState("");
   const [creating, setCreating] = React.useState(false);
   const [createError, setCreateError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const onPopState = () => {
+      setPage(pageFromUrl());
+      setLinkedTicketId(ticketFromUrl());
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  function navigateToPage(nextPage: Page) {
+    setPage(nextPage);
+    setLinkedTicketId(null);
+    const url = new URL(window.location.href);
+    if (nextPage === "overview") url.searchParams.delete("page");
+    else url.searchParams.set("page", nextPage);
+    url.searchParams.delete("ticket");
+    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
 
   React.useEffect(() => {
     // Reload the shell config whenever the active tenant changes. Clear the
@@ -130,7 +164,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
           <button
             key={n.id}
             className={`nav-item ${page === n.id ? "active" : ""}`}
-            onClick={() => setPage(n.id)}
+            onClick={() => navigateToPage(n.id)}
           >
             {n.label}
           </button>
@@ -184,7 +218,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
             {page === "overview" && <Overview tenantId={selectedTenantId} config={config} />}
             {page === "chatbot" && <ChatbotPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} />}
             {page === "knowledge" && <KnowledgePage tenantId={selectedTenantId} />}
-            {page === "tickets" && <TicketsPage tenantId={selectedTenantId} />}
+            {page === "tickets" && <TicketsPage tenantId={selectedTenantId} selectedTicketId={linkedTicketId} />}
             {page === "integrations" && <IntegrationsPage tenantId={selectedTenantId} />}
             {page === "team" && <TeamPage tenantId={selectedTenantId} />}
             {page === "audit" && <AuditPage tenantId={selectedTenantId} />}

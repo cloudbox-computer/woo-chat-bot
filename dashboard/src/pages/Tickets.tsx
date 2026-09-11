@@ -8,7 +8,7 @@ function statusTone(s: string) {
   return s === "open" ? "open" : s === "in_progress" ? "in_progress" : s === "resolved" ? "resolved" : "closed";
 }
 
-export default function TicketsPage({ tenantId }: { tenantId: string }) {
+export default function TicketsPage({ tenantId, selectedTicketId = null }: { tenantId: string; selectedTicketId?: string | null }) {
   const [items, setItems] = React.useState<TicketItem[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -28,6 +28,12 @@ export default function TicketsPage({ tenantId }: { tenantId: string }) {
     setError(null);
     load();
   }, [tenantId]);
+
+  React.useEffect(() => {
+    if (!items || !selectedTicketId) return;
+    const el = document.getElementById(`ticket-${selectedTicketId}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [items, selectedTicketId]);
 
   async function setStatus(id: string, status: string) {
     setBusy(true);
@@ -82,7 +88,11 @@ export default function TicketsPage({ tenantId }: { tenantId: string }) {
             </thead>
             <tbody>
               {filtered.map((t) => (
-                <tr key={t.id}>
+                <tr
+                  key={t.id}
+                  id={`ticket-${t.id}`}
+                  style={selectedTicketId === t.id ? { outline: "2px solid #9c7b4f", outlineOffset: -2, background: "rgba(156,123,79,0.08)" } : undefined}
+                >
                   <td style={{ whiteSpace: "nowrap", fontWeight: 600 }}>{t.reference}</td>
                   <td>
                     <div>{t.subject}</div>

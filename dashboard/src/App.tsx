@@ -49,8 +49,19 @@ export default function App() {
       const tenantsRes = await listTenants();
       setTenants(tenantsRes.tenants);
 
-      let currentTenantId = forceTenantId || selectedTenantIdRef.current;
       const validTenantIds = new Set(tenantsRes.tenants.map((tenant) => tenant.id));
+
+      // Deep links from ticket emails may specify the tenant. Only honour it
+      // after proving the signed-in user actually belongs to that tenant.
+      const linkedTenantId = (() => {
+        try { return new URLSearchParams(window.location.search).get("tenant"); }
+        catch { return null; }
+      })();
+
+      let currentTenantId =
+        forceTenantId ||
+        (linkedTenantId && validTenantIds.has(linkedTenantId) ? linkedTenantId : null) ||
+        selectedTenantIdRef.current;
 
       // localStorage is shared by browser profile, not by Supabase user. Never
       // trust a persisted tenant id unless it belongs to the current account.
