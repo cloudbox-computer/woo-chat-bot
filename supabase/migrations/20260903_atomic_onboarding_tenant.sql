@@ -110,6 +110,10 @@ begin
     select 1
     from public.tenants as existing_tenant
     where existing_tenant.slug = v_slug
+    union all
+    select 1
+    from public.chatbots as existing_bot
+    where existing_bot.id = v_slug
   )
   loop
     v_slug :=
