@@ -3,6 +3,7 @@ import { Routes } from "react-router-dom";
 import { supabase } from "./lib/supabase";
 import { getConfig, ApiError, type TenantSummary, listTenants } from './lib/api';
 import AuthPage from "./pages/Auth";
+import Landing from "./pages/Landing";
 import Onboarding from "./pages/Onboarding";
 import DashboardShell from "./pages/Dashboard";
 import { ToastHost } from "./components/ui";
@@ -122,7 +123,18 @@ export default function App() {
     return <div className="auth-wrap"><div className="muted">Loading…</div></div>;
   }
   if (state.status === "signed-out") {
-    return (<><AuthPage /><ToastHost /></>);
+    const params = new URLSearchParams(window.location.search);
+    const wantsLogin = window.location.pathname === "/login" || params.get("login") === "1" || params.has("ticket");
+    const openLogin = (plan?: "starter" | "growth" | "scale") => {
+      const next = new URL(window.location.href);
+      next.pathname = "/login";
+      next.searchParams.set("login", "1");
+      if (plan) { next.searchParams.set("page", "billing"); next.searchParams.set("plan", plan); }
+      window.history.pushState({}, "", next.pathname + next.search);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      window.location.reload();
+    };
+    return (<>{wantsLogin ? <AuthPage /> : <Landing onLogin={() => openLogin()} onChoosePlan={openLogin} />}<ToastHost /></>);
   }
   function handleOnboardingComplete(tenantId: string) {
     setSelectedTenantId(tenantId);

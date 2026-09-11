@@ -11,18 +11,29 @@ export interface PublicTenantControls {
   allowedOrigins: string[];
   monthlyRequestLimit: number;
   monthlyTokenLimit: number;
+  monthlyConversationLimit: number;
+  billingEnforced: boolean;
+  subscriptionStatus: string;
 }
 export async function controlsForChatbot(ref: string): Promise<PublicTenantControls | null> {
   const bots = await fetch(`${base()}/chatbots?or=(id.eq.${encodeURIComponent(ref)},public_id.eq.${encodeURIComponent(ref)})&select=tenant_id&limit=1`, { headers: headers() });
   if (!bots.ok) return null;
   const rows = await bots.json() as Array<{tenant_id:string}>;
   if (!rows[0]) return null;
-  const res = await fetch(`${base()}/tenants?id=eq.${rows[0].tenant_id}&select=id,allowed_origins,monthly_request_limit,monthly_token_limit&limit=1`, { headers: headers() });
+  const res = await fetch(`${base()}/tenants?id=eq.${rows[0].tenant_id}&select=id,allowed_origins,monthly_request_limit,monthly_token_limit,monthly_conversation_limit,billing_enforced,subscription_status&limit=1`, { headers: headers() });
   if (!res.ok) return null;
   const tenants = await res.json() as Array<Record<string, unknown>>;
   const t = tenants[0];
   if (!t) return null;
-  return { tenantId: String(t.id), allowedOrigins: Array.isArray(t.allowed_origins) ? t.allowed_origins.map(String) : [], monthlyRequestLimit: Number(t.monthly_request_limit ?? 100000), monthlyTokenLimit: Number(t.monthly_token_limit ?? 10000000) };
+  return {
+    tenantId: String(t.id),
+    allowedOrigins: Array.isArray(t.allowed_origins) ? t.allowed_origins.map(String) : [],
+    monthlyRequestLimit: Number(t.monthly_request_limit ?? 100000),
+    monthlyTokenLimit: Number(t.monthly_token_limit ?? 10000000),
+    monthlyConversationLimit: Number(t.monthly_conversation_limit ?? 500),
+    billingEnforced: t.billing_enforced === true,
+    subscriptionStatus: String(t.subscription_status ?? "inactive"),
+  };
 }
 export function originAllowed(req: Request, allowed: string[]): boolean {
   if (!allowed.length) return true;
@@ -65,4 +76,13 @@ export async function conversationControl(conversationId: string): Promise<{mode
   if (!res.ok) return null;
   const rows = await res.json() as Array<Record<string,unknown>>;
   return rows[0] ? { mode: String(rows[0].control_mode ?? "ai") } : null;
+}
+
+export async function monthlyConversationCount(tenantId: string): Promise<number> {
+  const res = await fetch(`${base()}/rpc/tenant_conversations_current_month`, {
+    method: "POST", headers: headers(), body: JSON.stringify({ p_tenant: tenantId }),
+  });
+  if (!res.ok) return 0;
+  const value = await res.json();
+  return Number(Array.isArray(value) ? value[0] ?? 0 : value ?? 0);
 }

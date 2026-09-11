@@ -1,0 +1,15 @@
+# ZoChat
+ZoChat is an AI customer service chatbot SaaS for websites, ecommerce stores and service businesses.
+
+## Core capabilities
+- Answers from tenant-approved website content and knowledge.
+- Uses provider-agnostic server-side tools for live business capabilities.
+- Can search products, verify and check orders, create support tickets and access configured business-data resources.
+- Supports separate tenant configuration, branding, topics and permissions.
+- Embeds on websites using a JavaScript snippet.
+
+## Pricing
+- Starter: £29/month ex VAT.
+- Growth: £79/month ex VAT.
+- Scale: £199/month ex VAT.
+Enterprise and custom-volume requirements are quoted separately.

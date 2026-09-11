@@ -5,7 +5,7 @@ import { AgentError, runAgent } from "../_shared/agent.ts";
 import { handleOptions, json, readJson } from "../_shared/cors.ts";
 import { signConversation, verifyConversation } from "../_shared/conversation-security.ts";
 import { allowPublicChat } from "../_shared/rate-limit.ts";
-import { controlsForChatbot, conversationControl, finalizeUsage, logAcceptedRequest, monthlyUsage, originAllowed } from "../_shared/enterprise.ts";
+import { controlsForChatbot, conversationControl, finalizeUsage, logAcceptedRequest, monthlyUsage, monthlyConversationCount, originAllowed } from "../_shared/enterprise.ts";
 import { getDb } from "../_shared/db.ts";
 import { redactForStorage } from "../_shared/privacy.ts";
 import { aiConfig, modelFor } from "../_shared/env.ts";
@@ -25,8 +25,18 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Too many requests. Please try again shortly.", requestId }, 429, { "Retry-After": "60", "X-Request-Id": requestId });
     }
     const controls = await controlsForChatbot(chatbotId);
+    const incomingConversationId = typeof body.conversationId === "string" ? body.conversationId : undefined;
     if (controls) {
       if (!originAllowed(req, controls.allowedOrigins)) return json({ error: "Widget origin is not authorised", requestId }, 403, { "X-Request-Id": requestId });
+      if (controls.billingEnforced && !["active", "trialing"].includes(controls.subscriptionStatus)) {
+        return json({ error: "This assistant is temporarily unavailable because the account subscription is inactive.", requestId }, 402, { "X-Request-Id": requestId });
+      }
+      if (!incomingConversationId) {
+        const conversations = await monthlyConversationCount(controls.tenantId);
+        if (conversations >= controls.monthlyConversationLimit) {
+          return json({ error: "This assistant has reached its monthly conversation allowance.", requestId }, 429, { "Retry-After": "3600", "X-Request-Id": requestId });
+        }
+      }
       const usage = await monthlyUsage(controls.tenantId);
       if (usage.requests >= controls.monthlyRequestLimit || usage.tokens >= controls.monthlyTokenLimit) {
         return json({ error: "Tenant usage limit reached", requestId }, 429, { "Retry-After": "3600", "X-Request-Id": requestId });
@@ -39,7 +49,7 @@ Deno.serve(async (req: Request) => {
       return json({ error: "message is too long (max 4000 chars)" }, 400);
     }
 
-    const conversationId = typeof body.conversationId === "string" ? body.conversationId : undefined;
+    const conversationId = incomingConversationId;
     const conversationToken = typeof body.conversationToken === "string" ? body.conversationToken : undefined;
     if (conversationId && !(await verifyConversation(chatbotId, conversationId, conversationToken))) {
       return json({ error: "Invalid conversation session", requestId }, 401, { "X-Request-Id": requestId });

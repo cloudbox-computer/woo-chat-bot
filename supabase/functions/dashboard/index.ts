@@ -21,6 +21,7 @@ import { supabaseConfig, env } from "../_shared/env.ts";
 import { encryptSecret, decryptSecret } from "../_shared/secrets.ts";
 import { audit } from "../_shared/audit.ts";
 import { monthlyUsage } from "../_shared/enterprise.ts";
+import { createCheckoutSession, createPortalSession, publicPlans } from "../_shared/billing.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
@@ -843,19 +844,78 @@ async function actionUpdateTicket(
 // ---------------------------------------------------------------------------
 // enterprise controls / audit / team / transcript / GDPR
 // ---------------------------------------------------------------------------
+
+async function actionBilling(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>, req: Request) {
+  const c = client();
+  if (req.method === "GET") {
+    const rows = await getRows(c, "tenants", {
+      select: "plan,billing_enforced,stripe_customer_id,stripe_subscription_id,subscription_status,stripe_price_id,subscription_current_period_end,cancel_at_period_end,monthly_conversation_limit,monthly_request_limit,monthly_token_limit,max_assistants",
+      id: `eq.${ctx.tenantId}`,
+      limit: "1",
+    });
+    const usageRes = await fetch(`${c.base}/rpc/tenant_conversations_current_month`, {
+      method: "POST", headers: c.headers, body: JSON.stringify({ p_tenant: ctx.tenantId }),
+    });
+    let conversations = 0;
+    if (usageRes.ok) {
+      const value = await usageRes.json();
+      conversations = Number(Array.isArray(value) ? value[0] ?? 0 : value ?? 0);
+    }
+    const row = rows[0] ?? {};
+    return json({
+      billing: {
+        plan: String(row.plan ?? "unsubscribed"),
+        billingEnforced: row.billing_enforced === true,
+        status: String(row.subscription_status ?? "inactive"),
+        hasCustomer: !!row.stripe_customer_id,
+        hasSubscription: !!row.stripe_subscription_id,
+        currentPeriodEnd: row.subscription_current_period_end ?? null,
+        cancelAtPeriodEnd: row.cancel_at_period_end === true,
+        conversationLimit: Number(row.monthly_conversation_limit ?? 500),
+        requestLimit: Number(row.monthly_request_limit ?? 10000),
+        tokenLimit: Number(row.monthly_token_limit ?? 2000000),
+        maxAssistants: Number(row.max_assistants ?? 1),
+        conversationsUsed: conversations,
+      },
+      plans: publicPlans(),
+      canManage: ctx.memberRole === "owner" || ctx.memberRole === "admin",
+    });
+  }
+
+  requireDashboardRole(ctx, "admin");
+  if (req.method !== "POST") throw new DashboardError("Unsupported billing operation", 405);
+  const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+  const operation = String(body.operation ?? "");
+  if (operation === "checkout") {
+    const result = await createCheckoutSession(ctx, String(body.plan ?? ""));
+    await audit(ctx, "billing.checkout.created", "tenant", ctx.tenantId, { plan: String(body.plan ?? "") });
+    return json(result);
+  }
+  if (operation === "portal") {
+    const result = await createPortalSession(ctx);
+    await audit(ctx, "billing.portal.opened", "tenant", ctx.tenantId);
+    return json(result);
+  }
+  throw new DashboardError("Unknown billing operation", 400);
+}
+
 async function actionEnterprise(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>, req: Request) {
   const c = client();
   if (req.method === "GET") {
-    const rows = await getRows(c, "tenants", { select: "plan,allowed_origins,retention_days,monthly_request_limit,monthly_token_limit,feature_flags,data_region", id: `eq.${ctx.tenantId}`, limit: "1" });
+    const rows = await getRows(c, "tenants", { select: "plan,billing_enforced,allowed_origins,retention_days,monthly_request_limit,monthly_token_limit,feature_flags,data_region", id: `eq.${ctx.tenantId}`, limit: "1" });
     return json({ settings: rows[0] ?? {} });
   }
   requireDashboardRole(ctx, "owner");
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
   const patch: Record<string, unknown> = {};
+  const billingRows = await getRows(c, "tenants", { select: "billing_enforced", id: `eq.${ctx.tenantId}`, limit: "1" });
+  const billingEnforced = billingRows[0]?.billing_enforced === true;
   if (Array.isArray(body.allowedOrigins)) patch.allowed_origins = body.allowedOrigins.map(String).map((v) => v.trim()).filter(Boolean);
   if (typeof body.retentionDays === "number" && body.retentionDays >= 1 && body.retentionDays <= 3650) patch.retention_days = Math.floor(body.retentionDays);
-  if (typeof body.monthlyRequestLimit === "number" && body.monthlyRequestLimit > 0) patch.monthly_request_limit = Math.floor(body.monthlyRequestLimit);
-  if (typeof body.monthlyTokenLimit === "number" && body.monthlyTokenLimit > 0) patch.monthly_token_limit = Math.floor(body.monthlyTokenLimit);
+  // Stripe-managed tenants get their usage limits from the paid plan. Owners
+  // cannot silently raise those limits through Enterprise settings.
+  if (!billingEnforced && typeof body.monthlyRequestLimit === "number" && body.monthlyRequestLimit > 0) patch.monthly_request_limit = Math.floor(body.monthlyRequestLimit);
+  if (!billingEnforced && typeof body.monthlyTokenLimit === "number" && body.monthlyTokenLimit > 0) patch.monthly_token_limit = Math.floor(body.monthlyTokenLimit);
   if (body.featureFlags && typeof body.featureFlags === "object") patch.feature_flags = body.featureFlags;
   if (typeof body.dataRegion === "string") patch.data_region = body.dataRegion.trim().slice(0, 32);
   if (Object.keys(patch).length) await write(c, "PATCH", `tenants?id=eq.${ctx.tenantId}`, patch);
@@ -1043,6 +1103,7 @@ Deno.serve(async (req: Request) => {
     if (action === "audit" && method === "GET") return await actionAudit(ctx);
     if (action === "team") return await actionTeam(ctx, req, url);
     if (action === "enterprise") return await actionEnterprise(ctx, req);
+    if (action === "billing") return await actionBilling(ctx, req);
     if (action === "operations" && method === "GET") return await actionOperations(ctx);
     if (action === "transcript" && method === "GET") return await actionTranscript(ctx, url);
     if (action === "takeover" && method === "POST") return await actionTakeover(ctx, req);

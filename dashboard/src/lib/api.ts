@@ -319,7 +319,7 @@ export function updateTicket(
 // --- enterprise ------------------------------------------------------------
 export interface AuditItem { id:string; actor_email?:string|null; action:string; resource_type:string; resource_id?:string|null; metadata?:Record<string,unknown>; created_at:string; }
 export interface TeamItem { id:string; user_id:string; role:"owner"|"admin"|"agent"|"viewer"; created_at:string; }
-export interface EnterpriseSettings { plan?:string; allowed_origins?:string[]; retention_days?:number; monthly_request_limit?:number; monthly_token_limit?:number; feature_flags?:Record<string,boolean>; data_region?:string; }
+export interface EnterpriseSettings { plan?:string; billing_enforced?:boolean; allowed_origins?:string[]; retention_days?:number; monthly_request_limit?:number; monthly_token_limit?:number; feature_flags?:Record<string,boolean>; data_region?:string; }
 export function getAudit(tenantId:string) { return request<{items:AuditItem[]}>(`/dashboard${tenantQuery(tenantId,"audit")}`); }
 export function getTeam(tenantId:string) { return request<{items:TeamItem[];currentUserId:string;currentRole:string}>(`/dashboard${tenantQuery(tenantId,"team")}`); }
 export function updateTeamRole(tenantId:string,id:string,role:TeamItem["role"]) { return request<{ok:boolean}>(`/dashboard${tenantQuery(tenantId,"team",{id})}`,{method:"PUT",body:JSON.stringify({role})}); }
@@ -336,3 +336,16 @@ export function setConversationMode(tenantId:string,conversationId:string,mode:"
 export function sendAgentMessage(tenantId:string,conversationId:string,message:string){return request<{ok:boolean;id:string}>(`/dashboard${tenantQuery(tenantId,"agent_message")}`,{method:"POST",body:JSON.stringify({conversationId,message})});}
 
 export function inviteTeamMember(tenantId:string,email:string,role:TeamItem["role"]){return request<{ok:boolean}>(`/dashboard${tenantQuery(tenantId,"team")}`,{method:"POST",body:JSON.stringify({email,role})});}
+
+
+// --- Stripe billing --------------------------------------------------------
+export type BillingPlanKey = "starter" | "growth" | "scale";
+export interface BillingPlanSummary { key: BillingPlanKey; name: string; monthlyPriceGbp: number; conversationLimit: number; requestLimit: number; tokenLimit: number; maxAssistants: number; }
+export interface BillingState {
+  plan: string; billingEnforced: boolean; status: string; hasCustomer: boolean; hasSubscription: boolean;
+  currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean; conversationLimit: number; requestLimit: number; tokenLimit: number;
+  maxAssistants: number; conversationsUsed: number;
+}
+export function getBilling(tenantId:string) { return request<{billing:BillingState;plans:BillingPlanSummary[];canManage:boolean}>(`/dashboard${tenantQuery(tenantId,"billing")}`); }
+export function createBillingCheckout(tenantId:string,plan:BillingPlanKey) { return request<{url:string}>(`/dashboard${tenantQuery(tenantId,"billing")}`,{method:"POST",body:JSON.stringify({operation:"checkout",plan})}); }
+export function openBillingPortal(tenantId:string) { return request<{url:string}>(`/dashboard${tenantQuery(tenantId,"billing")}`,{method:"POST",body:JSON.stringify({operation:"portal"})}); }

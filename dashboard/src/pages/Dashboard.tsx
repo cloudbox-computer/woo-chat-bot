@@ -11,8 +11,9 @@ import TeamPage from "./Team";
 import AuditPage from "./Audit";
 import EnterprisePage from "./Enterprise";
 import OperationsPage from "./Operations";
+import BillingPage from "./Billing";
 
-type Page = "overview" | "chatbot" | "knowledge" | "tickets" | "integrations" | "team" | "audit" | "operations" | "enterprise" | "settings";
+type Page = "overview" | "chatbot" | "knowledge" | "tickets" | "integrations" | "team" | "audit" | "operations" | "enterprise" | "billing" | "settings";
 
 const NAV: Array<{ id: Page; label: string }> = [
   { id: "overview", label: "Overview" },
@@ -24,6 +25,7 @@ const NAV: Array<{ id: Page; label: string }> = [
   { id: "audit", label: "Audit Log" },
   { id: "operations", label: "Operations" },
   { id: "enterprise", label: "Enterprise" },
+  { id: "billing", label: "Billing" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -224,6 +226,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
             {page === "audit" && <AuditPage tenantId={selectedTenantId} />}
             {page === "operations" && <OperationsPage tenantId={selectedTenantId} />}
             {page === "enterprise" && <EnterprisePage tenantId={selectedTenantId} />}
+            {page === "billing" && <BillingPage tenantId={selectedTenantId} />}
             {page === "settings" && <SettingsPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} />}
           </React.Fragment>
         )}

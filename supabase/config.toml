@@ -42,3 +42,8 @@ verify_jwt = false
 
 [functions.maintenance]
 verify_jwt = false
+
+# Stripe webhook validates Stripe-Signature itself, so gateway JWT verification
+# must be disabled for Stripe's server-to-server callbacks.
+[functions.stripe-webhook]
+verify_jwt = false

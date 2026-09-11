@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+Disallow: /login
+Sitemap: https://dashboard-kappa-flax-30.vercel.app/sitemap.xml
