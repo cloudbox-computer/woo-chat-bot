@@ -207,6 +207,23 @@ export function subscriptionPeriodEnd(subscription: Record<string, unknown>): st
   return ends.length ? new Date(Math.max(...ends) * 1000).toISOString() : null;
 }
 
+
+async function enforceActiveAssistantAllowance(tenantId: string, maxAssistants: number): Promise<void> {
+  const res = await fetch(`${dbBase()}/chatbots?tenant_id=eq.${encodeURIComponent(tenantId)}&select=id,active,created_at&order=created_at.asc`, { headers: dbHeaders() });
+  if (!res.ok) throw new DashboardError("Could not enforce assistant allowance", 502);
+  const rows = await res.json() as Array<{ id: string; active?: boolean; created_at?: string }>;
+  const active = rows.filter((row) => row.active !== false);
+  const extras = active.slice(Math.max(1, maxAssistants));
+  for (const bot of extras) {
+    const pause = await fetch(`${dbBase()}/chatbots?id=eq.${encodeURIComponent(bot.id)}&tenant_id=eq.${encodeURIComponent(tenantId)}`, {
+      method: "PATCH",
+      headers: { ...dbHeaders(), Prefer: "return=minimal" },
+      body: JSON.stringify({ active: false }),
+    });
+    if (!pause.ok) throw new DashboardError("Could not pause assistants above the plan allowance", 502);
+  }
+}
+
 export async function syncSubscription(subscription: Record<string, unknown>, tenantHint?: string): Promise<string | null> {
   const customerId = typeof subscription.customer === "string" ? subscription.customer : nestedString(subscription, "customer", "id");
   const subscriptionId = String(subscription.id ?? "");
@@ -243,6 +260,7 @@ export async function syncSubscription(subscription: Record<string, unknown>, te
     patch.max_assistants = ent.maxAssistants;
   }
   await patchTenant(tenantId, patch);
+  if (plan) await enforceActiveAssistantAllowance(tenantId, planEntitlements(plan).maxAssistants);
   return tenantId;
 }
 

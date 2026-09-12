@@ -86,9 +86,11 @@ export function authUserFromRequest(req: Request): AuthUser | null {
 
 export class DashboardError extends Error {
   status: number;
-  constructor(message: string, status = 400) {
+  code?: string;
+  constructor(message: string, status = 400, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -140,11 +142,21 @@ export async function resolveDashboardContext(
   const row = data[0];
   if (!row) throw new DashboardError("Tenant not found", 404);
 
+  // Defence in depth for plan downgrades: Starter is single-user (owner only).
+  // Growth/Scale and legacy workspaces may use team memberships.
+  if (row.billing_enforced === true && String(row.plan ?? "").toLowerCase() === "starter" && membership.role !== "owner") {
+    throw new DashboardError("Team access requires the Growth plan.", 403, "PLAN_UPGRADE_REQUIRED");
+  }
+
   const tenant: Tenant = {
     id: String(row.id),
     slug: String(row.slug),
     name: String(row.name),
     currency: String(row.currency ?? "GBP"),
+    plan: row.plan ? String(row.plan) : undefined,
+    billingEnforced: row.billing_enforced === true,
+    subscriptionStatus: row.subscription_status ? String(row.subscription_status) : undefined,
+    maxAssistants: Number(row.max_assistants ?? 1),
     storeUrl: row.store_url ? String(row.store_url) : undefined,
     welcomeMessage: String(row.welcome_message ?? ""),
     tone: row.tone ? String(row.tone) : undefined,

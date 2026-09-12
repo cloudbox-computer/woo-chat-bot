@@ -37,6 +37,11 @@ export interface Tenant {
   kind?: "retail" | "services"; // legacy compatibility only; scope is tenant-configured
   storeUrl?: string;
   currency: string;
+  /** Stripe plan metadata used by server-side entitlement gating. */
+  plan?: "starter" | "growth" | "scale" | string;
+  billingEnforced?: boolean;
+  subscriptionStatus?: string;
+  maxAssistants?: number;
   welcomeMessage: string;
   assistantHeaderMessage?: string;
   tone?: string;

@@ -1,4 +1,5 @@
 import type { Tenant } from "../types.ts";
+import { entitlementsForTenant } from "../entitlements.ts";
 import { WooCommerceClient } from "../woo.ts";
 import { SupabaseBusinessDataProvider, SupabaseCatalogueProvider, SupabaseOrdersProvider, type SupabaseCapabilityConfig } from "./supabase.ts";
 import type { Capability, CapabilityRegistry, IntegrationRouter } from "./types.ts";
@@ -30,6 +31,7 @@ class Router implements IntegrationRouter {
 }
 
 export function createIntegrationRouter(tenant: Tenant): IntegrationRouter {
+  const planAccess = entitlementsForTenant(tenant);
   const capabilities = new Set<Capability>([
     "knowledge.read", "cart.read", "cart.write", "support.read", "support.write",
   ]);
@@ -39,7 +41,7 @@ export function createIntegrationRouter(tenant: Tenant): IntegrationRouter {
   // Provider priority is explicit and deterministic. WooCommerce is the native
   // commerce adapter when connected. Supabase may implement the same business
   // capabilities only when a capability mapping is configured.
-  if (tenant.wooUrl && tenant.wooKey && tenant.wooSecret) {
+  if (planAccess.liveIntegrations && tenant.wooUrl && tenant.wooKey && tenant.wooSecret) {
     const woo = new WooCommerceClient(tenant);
     registry.catalogue = {
       providerId: "woocommerce",
@@ -65,8 +67,8 @@ export function createIntegrationRouter(tenant: Tenant): IntegrationRouter {
     ["catalogue.read", "orders.read", "orders.write", "checkout.create", "inventory.read", "analytics.read"].forEach((c) => capabilities.add(c as Capability));
   }
 
-  if (tenant.supabaseUrl && tenant.supabaseAnonKey) {
-    if (tenant.supabaseQueryPolicy?.tables && Object.keys(tenant.supabaseQueryPolicy.tables).length) {
+  if (planAccess.liveIntegrations && tenant.supabaseUrl && tenant.supabaseAnonKey) {
+    if (planAccess.businessData && tenant.supabaseQueryPolicy?.tables && Object.keys(tenant.supabaseQueryPolicy.tables).length) {
       registry.businessData = new SupabaseBusinessDataProvider(tenant);
       capabilities.add("business_data.read");
     }

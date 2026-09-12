@@ -10,9 +10,9 @@ const features = [
 ];
 
 const plans = [
-  { key: "starter" as const, name: "Starter", price: "£29", desc: "For small businesses launching AI support.", items: ["1 AI assistant", "500 conversations / month", "Website & knowledge answers", "Support ticket creation", "Custom branding", "Email support"] },
-  { key: "growth" as const, name: "Growth", price: "£79", desc: "For growing teams that need live integrations.", popular: true, items: ["3 AI assistants", "2,500 conversations / month", "Everything in Starter", "Product & order integrations", "Business-data tools", "Team dashboard & analytics", "Priority support"] },
-  { key: "scale" as const, name: "Scale", price: "£199", desc: "For higher-volume businesses and agencies.", items: ["10 AI assistants", "10,000 conversations / month", "Everything in Growth", "Advanced permissions", "Audit & operational controls", "Higher usage limits", "Priority onboarding"] },
+  { key: "starter" as const, name: "Starter", price: "£29", desc: "For small businesses launching AI support.", items: ["1 AI assistant", "500 conversations / month", "Website & knowledge answers", "Support ticket creation", "Custom branding", "Resend ticket-email delivery"] },
+  { key: "growth" as const, name: "Growth", price: "£79", desc: "For growing teams that need live integrations.", popular: true, items: ["3 AI assistants", "2,500 conversations / month", "Everything in Starter", "WooCommerce & Supabase integrations", "Business-data tools", "Team access & human takeover", "Full dashboard analytics"] },
+  { key: "scale" as const, name: "Scale", price: "£199", desc: "For higher-volume businesses and agencies.", items: ["10 AI assistants", "10,000 conversations / month", "Everything in Growth", "Advanced team permissions", "Audit log & operations", "Enterprise controls", "Higher usage limits"] },
 ];
 
 const faqs = [

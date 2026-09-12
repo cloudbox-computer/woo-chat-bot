@@ -26,6 +26,7 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
         { label: "Support tickets", value: data.tickets, tone: "text" },
         { label: "Open tickets", value: data.openTickets, tone: "amber" },
         { label: "Chat requests", value: data.usage, tone: "text" },
+        ...(config?.entitlements.fullAnalytics ? [{ label: "Feedback received", value: data.feedback ?? 0, tone: "text" }] : []),
       ]
     : null;
 
@@ -48,7 +49,7 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
           </div>
           <div className="setup-grid">
             <button className="setup-step done" type="button" onClick={()=>onNavigate?.("chatbot")}><span>✓</span><div><b>Business & assistant</b><small>Configured</small></div></button>
-            <button className={`setup-step ${integrations.some(i=>i.active&&i.configured)?"done":""}`} type="button" onClick={()=>onNavigate?.("integrations")}><span>{integrations.some(i=>i.active&&i.configured)?"✓":"2"}</span><div><b>Connect integrations</b><small>{integrations.some(i=>i.active&&i.configured)?`${integrations.filter(i=>i.active&&i.configured).length} connected`:"Optional — connect your systems"}</small></div></button>
+            <button className={`setup-step ${integrations.some(i=>i.active&&i.configured)?"done":""}`} type="button" onClick={()=>onNavigate?.("integrations")}><span>{integrations.some(i=>i.active&&i.configured)?"✓":"2"}</span><div><b>Connect integrations</b><small>{config?.entitlements.liveIntegrations ? (integrations.some(i=>i.active&&i.configured)?`${integrations.filter(i=>i.active&&i.configured).length} connected`:"Optional — connect your systems") : "Growth unlocks WooCommerce & Supabase"}</small></div></button>
             <button className={`setup-step ${billing && ["active","trialing"].includes(billing.status)?"done":""}`} type="button" onClick={()=>onNavigate?.("billing")}><span>{billing && ["active","trialing"].includes(billing.status)?"✓":"3"}</span><div><b>Plan & billing</b><small>{billing?.status === "trialing"?"Free trial active":billing?.status === "active"?`${billing.plan} active`:"Complete subscription"}</small></div></button>
             <button className="setup-step" type="button" onClick={()=>onNavigate?.("chatbot")}><span>4</span><div><b>Install website widget</b><small>Copy your unique embed snippet</small></div></button>
           </div>
@@ -119,14 +120,14 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
           <div className="modal" style={{maxWidth:760,maxHeight:"80vh",overflow:"auto"}} onClick={(e)=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",gap:12}}><h2>Conversation transcript</h2><button className="btn ghost" onClick={()=>setTranscript(null)}>Close</button></div>
             <div className="muted" style={{marginBottom:12}}>{String(transcript.conversation.title ?? "Conversation")} · mode: <b>{String(transcript.conversation.control_mode ?? "ai")}</b></div>
-            <div style={{display:"flex",gap:8,marginBottom:12}}>
+            {config?.entitlements.humanTakeover ? <div style={{display:"flex",gap:8,marginBottom:12}}>
               <button className="btn secondary" onClick={async()=>{await setConversationMode(tenantId,String(transcript.conversation.id),"human");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}>Take over</button>
               <button className="btn ghost" onClick={async()=>{await setConversationMode(tenantId,String(transcript.conversation.id),"ai");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}>Return to AI</button>
-            </div>
+            </div> : <div className="muted" style={{marginBottom:12}}>Human takeover is available on Growth and Scale.</div>}
             {transcript.messages.map((m)=><div key={String(m.id)} style={{padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,marginBottom:8}}>
               <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase"}}>{String(m.source ?? m.role)}</div><div style={{whiteSpace:"pre-wrap"}}>{String(m.content)}</div><div className="muted" style={{fontSize:11,marginTop:6}}>{new Date(String(m.created_at)).toLocaleString()}</div>
             </div>)}
-            {String(transcript.conversation.control_mode ?? "ai") === "human" && <div style={{display:"flex",gap:8,marginTop:12}}><input className="input" placeholder="Reply as agent…" value={agentText} onChange={e=>setAgentText(e.target.value)} onKeyDown={async e=>{if(e.key==="Enter"&&agentText.trim()){await sendAgentMessage(tenantId,String(transcript.conversation.id),agentText.trim());setAgentText("");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}}/><button className="btn primary" onClick={async()=>{if(!agentText.trim())return;await sendAgentMessage(tenantId,String(transcript.conversation.id),agentText.trim());setAgentText("");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}>Send</button></div>}
+            {config?.entitlements.humanTakeover && String(transcript.conversation.control_mode ?? "ai") === "human" && <div style={{display:"flex",gap:8,marginTop:12}}><input className="input" placeholder="Reply as agent…" value={agentText} onChange={e=>setAgentText(e.target.value)} onKeyDown={async e=>{if(e.key==="Enter"&&agentText.trim()){await sendAgentMessage(tenantId,String(transcript.conversation.id),agentText.trim());setAgentText("");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}}/><button className="btn primary" onClick={async()=>{if(!agentText.trim())return;await sendAgentMessage(tenantId,String(transcript.conversation.id),agentText.trim());setAgentText("");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}>Send</button></div>}
           </div>
         </div>
       )}

@@ -1,6 +1,6 @@
 import React from "react";
 import { supabase } from "../lib/supabase";
-import { getConfig, type ConfigData, type TenantSummary, createTenant, listTenants } from "../lib/api";
+import { getConfig, type ConfigData, type TenantSummary, type PlanEntitlements, createTenant, listTenants } from "../lib/api";
 import Overview from "./Overview";
 import ChatbotPage from "./Chatbot";
 import KnowledgePage from "./Knowledge";
@@ -28,6 +28,26 @@ const NAV: Array<{ id: Page; label: string }> = [
   { id: "billing", label: "Billing" },
   { id: "settings", label: "Settings" },
 ];
+const PAGE_FEATURE: Partial<Record<Page, keyof PlanEntitlements>> = {
+  team: "team",
+  audit: "auditLog",
+  operations: "operations",
+  enterprise: "enterpriseControls",
+};
+
+function pageAllowed(page: Page, entitlements?: PlanEntitlements | null): boolean {
+  const feature = PAGE_FEATURE[page];
+  if (!feature) return true;
+  return entitlements?.[feature] === true;
+}
+
+function requiredPlanForPage(page: Page, entitlements?: PlanEntitlements | null): string {
+  const feature = PAGE_FEATURE[page];
+  if (!feature) return "a higher";
+  const plan = entitlements?.minimumUpgradeFor?.[feature];
+  return plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : "a higher";
+}
+
 
 interface DashboardShellProps {
   tenants: TenantSummary[];
@@ -162,7 +182,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
         </div>
 
         <div className="nav-label">Manage</div>
-        {NAV.map((n) => (
+        {NAV.filter((n) => pageAllowed(n.id, config?.entitlements)).map((n) => (
           <button
             key={n.id}
             className={`nav-item ${page === n.id ? "active" : ""}`}
@@ -217,17 +237,21 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
       <main className="main">
         {selectedTenantId && (
           <React.Fragment key={selectedTenantId}>
-            {page === "overview" && <Overview tenantId={selectedTenantId} config={config} onNavigate={(next)=>navigateToPage(next)} />}
-            {page === "chatbot" && <ChatbotPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} />}
-            {page === "knowledge" && <KnowledgePage tenantId={selectedTenantId} />}
-            {page === "tickets" && <TicketsPage tenantId={selectedTenantId} selectedTicketId={linkedTicketId} />}
-            {page === "integrations" && <IntegrationsPage tenantId={selectedTenantId} />}
-            {page === "team" && <TeamPage tenantId={selectedTenantId} />}
-            {page === "audit" && <AuditPage tenantId={selectedTenantId} />}
-            {page === "operations" && <OperationsPage tenantId={selectedTenantId} />}
-            {page === "enterprise" && <EnterprisePage tenantId={selectedTenantId} />}
-            {page === "billing" && <BillingPage tenantId={selectedTenantId} />}
-            {page === "settings" && <SettingsPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} />}
+            {!pageAllowed(page, config?.entitlements) ? (
+              <div className="page"><div className="card"><h1>Upgrade required</h1><p className="desc">This feature is available on the {requiredPlanForPage(page, config?.entitlements)} plan.</p><button className="btn primary" onClick={()=>navigateToPage("billing")}>View plans</button></div></div>
+            ) : (<>
+              {page === "overview" && <Overview tenantId={selectedTenantId} config={config} onNavigate={(next)=>navigateToPage(next)} />}
+              {page === "chatbot" && <ChatbotPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} />}
+              {page === "knowledge" && <KnowledgePage tenantId={selectedTenantId} />}
+              {page === "tickets" && <TicketsPage tenantId={selectedTenantId} selectedTicketId={linkedTicketId} />}
+              {page === "integrations" && <IntegrationsPage tenantId={selectedTenantId} entitlements={config?.entitlements ?? null} onUpgrade={()=>navigateToPage("billing")} />}
+              {page === "team" && <TeamPage tenantId={selectedTenantId} entitlements={config?.entitlements ?? null} />}
+              {page === "audit" && <AuditPage tenantId={selectedTenantId} />}
+              {page === "operations" && <OperationsPage tenantId={selectedTenantId} />}
+              {page === "enterprise" && <EnterprisePage tenantId={selectedTenantId} />}
+              {page === "billing" && <BillingPage tenantId={selectedTenantId} />}
+              {page === "settings" && <SettingsPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} />}
+            </>)}
           </React.Fragment>
         )}
       </main>

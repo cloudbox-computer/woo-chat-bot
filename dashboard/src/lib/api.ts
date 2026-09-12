@@ -111,6 +111,7 @@ export interface OverviewData {
   tickets: number;
   openTickets: number;
   usage: number;
+  feedback?: number;
   recentConversations: Array<{
     id: string;
     title: string;
@@ -149,9 +150,27 @@ export interface ChatbotInfo {
   config: Record<string, unknown>;
 }
 
+export interface PlanEntitlements {
+  plan: "starter" | "growth" | "scale" | "legacy" | "unsubscribed";
+  legacy: boolean;
+  subscriptionActive: boolean;
+  liveIntegrations: boolean;
+  businessData: boolean;
+  team: boolean;
+  humanTakeover: boolean;
+  auditLog: boolean;
+  operations: boolean;
+  enterpriseControls: boolean;
+  advancedPermissions: boolean;
+  fullAnalytics: boolean;
+  maxAssistants: number;
+  minimumUpgradeFor: Partial<Record<string, "starter" | "growth" | "scale">>;
+}
+
 export interface ConfigData {
   tenant: TenantConfig;
   chatbots: ChatbotInfo[];
+  entitlements: PlanEntitlements;
   embedScript: string;
 }
 
@@ -347,6 +366,6 @@ export interface BillingState {
   currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean; conversationLimit: number; requestLimit: number; tokenLimit: number;
   maxAssistants: number; conversationsUsed: number;
 }
-export function getBilling(tenantId:string) { return request<{billing:BillingState;plans:BillingPlanSummary[];canManage:boolean}>(`/dashboard${tenantQuery(tenantId,"billing")}`); }
+export function getBilling(tenantId:string) { return request<{billing:BillingState;plans:BillingPlanSummary[];canManage:boolean;entitlements:PlanEntitlements}>(`/dashboard${tenantQuery(tenantId,"billing")}`); }
 export function createBillingCheckout(tenantId:string,plan:BillingPlanKey,source:"billing"|"onboarding"="billing") { return request<{url:string}>(`/dashboard${tenantQuery(tenantId,"billing")}`,{method:"POST",body:JSON.stringify({operation:"checkout",plan,source})}); }
 export function openBillingPortal(tenantId:string) { return request<{url:string}>(`/dashboard${tenantQuery(tenantId,"billing")}`,{method:"POST",body:JSON.stringify({operation:"portal"})}); }

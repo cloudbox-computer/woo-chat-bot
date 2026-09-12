@@ -184,6 +184,10 @@ export class SupabaseDb implements Db {
       name: String(row.name),
       industry: row.industry ? String(row.industry) : undefined,
       currency: String(row.currency ?? "GBP"),
+      plan: row.plan ? String(row.plan) : undefined,
+      billingEnforced: row.billing_enforced === true,
+      subscriptionStatus: row.subscription_status ? String(row.subscription_status) : undefined,
+      maxAssistants: Number(row.max_assistants ?? 1),
       storeUrl: row.store_url ? String(row.store_url) : undefined,
       welcomeMessage: String(row.welcome_message ?? ""),
       assistantHeaderMessage: row.assistant_header_message ? String(row.assistant_header_message) : undefined,
@@ -246,7 +250,7 @@ export class SupabaseDb implements Db {
     const bot = await this.getChatbot(chatbotId);
     if (!bot) return null;
     const rows = await this.get<Record<string, unknown>>("tenants", {
-      select: "id,slug,name,industry,currency,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(provider,credentials,active)",
+      select: "id,slug,name,industry,currency,plan,billing_enforced,subscription_status,max_assistants,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(provider,credentials,active)",
       id: `eq.${bot.tenantId}`,
       limit: "1",
     });

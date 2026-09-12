@@ -1,8 +1,8 @@
 import React from "react";
-import { getIntegrations, testIntegration, updateIntegration, type IntegrationItem } from "../lib/api";
+import { getIntegrations, testIntegration, updateIntegration, type IntegrationItem, type PlanEntitlements } from "../lib/api";
 import { Card, Field, Spinner, ErrorBox, Badge, toast } from "../components/ui";
 
-export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
+export default function IntegrationsPage({ tenantId, entitlements, onUpgrade }: { tenantId: string; entitlements: PlanEntitlements | null; onUpgrade?: () => void }) {
   const [items, setItems] = React.useState<IntegrationItem[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [showWoo, setShowWoo] = React.useState(false);
@@ -21,6 +21,7 @@ export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
   const [resendKey, setResendKey] = React.useState("");
   const [resendFromEmail, setResendFromEmail] = React.useState("");
   const [resendFromName, setResendFromName] = React.useState("");
+  const liveIntegrationsLocked = entitlements ? !entitlements.liveIntegrations : false;
 
   async function load() {
     try {
@@ -166,7 +167,7 @@ export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
       <div className="page-head">
         <div>
           <h1>Integrations</h1>
-          <p className="desc">Connect your store so the assistant can look up real data.</p>
+          <p className="desc">Connect approved systems so the assistant can look up real data. WooCommerce and Supabase require Growth or Scale; Resend ticket email is available on every plan.</p>
         </div>
       </div>
 
@@ -186,7 +187,9 @@ export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
           )}
         </div>
 
-        {!showWoo ? (
+        {liveIntegrationsLocked ? (
+          <div style={{ marginTop: 8 }}><div className="muted" style={{marginBottom:8}}>Locked on Starter. Upgrade to Growth to enable live commerce integrations.</div><button className="btn primary" onClick={onUpgrade}>Upgrade to Growth</button></div>
+        ) : !showWoo ? (
           <div style={{ marginTop: 8 }}>
             <button className="btn secondary" onClick={() => setShowWoo(true)}>
               {woo?.configured ? "Update credentials" : "Connect store"}
@@ -231,7 +234,9 @@ export default function IntegrationsPage({ tenantId }: { tenantId: string }) {
           )}
         </div>
 
-        {!showSupa ? (
+        {liveIntegrationsLocked ? (
+          <div style={{ marginTop: 8 }}><div className="muted" style={{marginBottom:8}}>Locked on Starter. Upgrade to Growth to enable database and business-data integrations.</div><button className="btn primary" onClick={onUpgrade}>Upgrade to Growth</button></div>
+        ) : !showSupa ? (
           <div style={{ marginTop: 8 }}>
             <button className="btn secondary" onClick={() => {
               setShowSupa(true);

@@ -84,7 +84,10 @@ export default function ChatbotPage({
           const prompt = rest.join("|").trim() || label;
           return { label, prompt };
         }).filter((x) => x.label).slice(0, 8);
-        patch.chatbot = { ...(bot.config ?? {}), welcome, tone, quickActions };
+        // Only submit fields this screen actually edits. Advanced permission
+        // arrays are Scale-only and must never be replayed accidentally from
+        // the existing config by lower plans.
+        patch.chatbot = { welcome, tone, quickActions };
       }
       await updateConfig(tenantId, patch);
       const fresh = await getConfig(tenantId);

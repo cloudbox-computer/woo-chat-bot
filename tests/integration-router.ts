@@ -62,3 +62,30 @@ function assert(name: string, ok: boolean) {
 }
 
 console.log("Integration router tests passed.");
+
+{
+  const r = createIntegrationRouter(tenant({
+    plan: "starter",
+    billingEnforced: true,
+    subscriptionStatus: "active",
+    wooUrl: "https://example.com",
+    wooKey: "ck_test",
+    wooSecret: "cs_test",
+  }));
+  assert("Starter cannot expose live catalogue integrations", !r.has("catalogue.read"));
+  assert("Starter cannot expose provider-neutral product tools", !toolSupported(r, "search_products"));
+  assert("Starter keeps knowledge and support capabilities", toolSupported(r, "search_knowledge") && toolSupported(r, "create_ticket"));
+}
+
+{
+  const r = createIntegrationRouter(tenant({
+    plan: "growth",
+    billingEnforced: true,
+    subscriptionStatus: "active",
+    wooUrl: "https://example.com",
+    wooKey: "ck_test",
+    wooSecret: "cs_test",
+  }));
+  assert("Growth exposes live catalogue integrations", r.has("catalogue.read"));
+  assert("Growth exposes live order integrations", r.has("orders.read"));
+}

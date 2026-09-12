@@ -22,6 +22,7 @@ import { encryptSecret, decryptSecret } from "../_shared/secrets.ts";
 import { audit } from "../_shared/audit.ts";
 import { monthlyUsage } from "../_shared/enterprise.ts";
 import { createCheckoutSession, createPortalSession, publicPlans } from "../_shared/billing.ts";
+import { entitlementsForTenant, requirePlanFeature } from "../_shared/entitlements.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
@@ -246,7 +247,7 @@ async function actionOverview(ctx: Awaited<ReturnType<typeof resolveDashboardCon
     tickets: Number(tickets[0]?.count ?? 0),
     openTickets: Number(openTickets[0]?.count ?? 0),
     usage: Number(usage[0]?.count ?? 0),
-    feedback: feedbackCount,
+    feedback: entitlementsForTenant(ctx.tenant).fullAnalytics ? feedbackCount : undefined,
     recentConversations: recentConv.map((r) => ({
       id: r.id,
       title: r.title ?? "(no title)",
@@ -313,6 +314,7 @@ async function actionGetConfig(ctx: Awaited<ReturnType<typeof resolveDashboardCo
       active: b.active === true,
       config: (b.config ?? {}) as Record<string, unknown>,
     })),
+    entitlements: entitlementsForTenant(ctx.tenant),
     embedScript: embedScriptFor(
       typeof botRows[0]?.public_id === "string" && botRows[0].public_id
         ? botRows[0].public_id
@@ -422,6 +424,7 @@ async function actionUpdateConfig(
       if (body.chatbot && typeof body.chatbot === "object") {
         const cb = body.chatbot as Record<string, unknown>;
         if (typeof cb.permissions === "object" && cb.permissions !== null) {
+          requirePlanFeature(ctx.tenant, "advancedPermissions");
           cfg.permissions = cb.permissions;
         }
         if (typeof cb.welcome === "string") cfg.welcome = cb.welcome;
@@ -693,6 +696,7 @@ async function actionUpdateIntegration(
     ? String(body.provider) as "woocommerce" | "supabase" | "resend"
     : undefined;
   if (!provider) throw new DashboardError("Only woocommerce, supabase and resend are supported");
+  if (provider === "woocommerce" || provider === "supabase") requirePlanFeature(ctx.tenant, "liveIntegrations");
   const creds = (body.credentials ?? {}) as Record<string, unknown>;
 
   const c = client();
@@ -719,6 +723,7 @@ async function actionUpdateIntegration(
       throw new DashboardError("Supabase project URL is required (e.g. https://xyz.supabase.co)");
     }
     const previous = ((existing[0]?.credentials ?? {}) as Record<string, unknown>);
+    if (creds.query_policy !== undefined && creds.query_policy !== null) requirePlanFeature(ctx.tenant, "businessData");
     const queryPolicy = creds.query_policy !== undefined
       ? validateSupabaseQueryPolicy(creds.query_policy)
       : (previous.query_policy as Record<string, unknown> | undefined);
@@ -769,6 +774,7 @@ async function actionTestIntegration(ctx: Awaited<ReturnType<typeof resolveDashb
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
   const provider = String(body.provider ?? "");
   if (!["woocommerce","supabase","resend"].includes(provider)) throw new DashboardError("Invalid provider");
+  if (provider === "woocommerce" || provider === "supabase") requirePlanFeature(ctx.tenant, "liveIntegrations");
   const c = client();
   const rows = await getRows(c, "integrations", { select: "credentials,active", tenant_id: `eq.${ctx.tenantId}`, provider: `eq.${provider}`, limit: "1" });
   if (!rows[0]) throw new DashboardError("Integration is not configured", 404);
@@ -879,6 +885,7 @@ async function actionBilling(ctx: Awaited<ReturnType<typeof resolveDashboardCont
       },
       plans: publicPlans(),
       canManage: ctx.memberRole === "owner" || ctx.memberRole === "admin",
+      entitlements: entitlementsForTenant(ctx.tenant),
     });
   }
 
@@ -930,6 +937,7 @@ async function actionAudit(ctx: Awaited<ReturnType<typeof resolveDashboardContex
 }
 
 async function actionTeam(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>, req: Request, url: URL) {
+  requirePlanFeature(ctx.tenant, "team");
   const c = client();
   if (req.method === "GET") {
     const rows = await getRows(c, "tenant_members", { select: "id,user_id,role,created_at", tenant_id: `eq.${ctx.tenantId}`, order: "created_at.asc" });
@@ -942,6 +950,7 @@ async function actionTeam(ctx: Awaited<ReturnType<typeof resolveDashboardContext
     const role = String(body.role ?? "viewer");
     if (!EMAIL_RE.test(email)) throw new DashboardError("A valid email is required");
     if (!["owner","admin","agent","viewer"].includes(role)) throw new DashboardError("Invalid role");
+    if (role === "owner" || role === "admin") requirePlanFeature(ctx.tenant, "advancedPermissions");
     const { url: projectUrl, serviceRoleKey } = supabaseConfig();
     const authHeaders = { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}`, "Content-Type": "application/json" };
     let userId = "";
@@ -971,6 +980,9 @@ async function actionTeam(ctx: Awaited<ReturnType<typeof resolveDashboardContext
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const role = String(body.role ?? "");
     if (!["owner","admin","agent","viewer"].includes(role)) throw new DashboardError("Invalid role");
+    if (role === "owner" || role === "admin" || member[0].role === "owner" || member[0].role === "admin") {
+      requirePlanFeature(ctx.tenant, "advancedPermissions");
+    }
     if (member[0].role === "owner" && role !== "owner") {
       const owners = await getRows(c, "tenant_members", { select: "id", tenant_id: `eq.${ctx.tenantId}`, role: "eq.owner" });
       if (owners.length <= 1) throw new DashboardError("Cannot demote the last owner", 409);
@@ -1044,6 +1056,7 @@ async function actionGdpr(ctx: Awaited<ReturnType<typeof resolveDashboardContext
 
 
 async function actionTakeover(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>, req: Request) {
+  requirePlanFeature(ctx.tenant, "humanTakeover");
   requireDashboardRole(ctx, "agent");
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
   const conversationId = String(body.conversationId ?? "");
@@ -1057,6 +1070,7 @@ async function actionTakeover(ctx: Awaited<ReturnType<typeof resolveDashboardCon
   return json({ok:true,mode});
 }
 async function actionAgentMessage(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>, req: Request) {
+  requirePlanFeature(ctx.tenant, "humanTakeover");
   requireDashboardRole(ctx, "agent");
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
   const conversationId = String(body.conversationId ?? ""); const message = String(body.message ?? "").trim();
@@ -1101,11 +1115,11 @@ Deno.serve(async (req: Request) => {
       if (method === "POST") return await actionCreateTenant(req);
     }
     if (action === "overview") return await actionOverview(ctx);
-    if (action === "audit" && method === "GET") return await actionAudit(ctx);
+    if (action === "audit" && method === "GET") { requirePlanFeature(ctx.tenant, "auditLog"); return await actionAudit(ctx); }
     if (action === "team") return await actionTeam(ctx, req, url);
-    if (action === "enterprise") return await actionEnterprise(ctx, req);
+    if (action === "enterprise") { requirePlanFeature(ctx.tenant, "enterpriseControls"); return await actionEnterprise(ctx, req); }
     if (action === "billing") return await actionBilling(ctx, req);
-    if (action === "operations" && method === "GET") return await actionOperations(ctx);
+    if (action === "operations" && method === "GET") { requirePlanFeature(ctx.tenant, "operations"); return await actionOperations(ctx); }
     if (action === "transcript" && method === "GET") return await actionTranscript(ctx, url);
     if (action === "takeover" && method === "POST") return await actionTakeover(ctx, req);
     if (action === "agent_message" && method === "POST") return await actionAgentMessage(ctx, req);
@@ -1138,7 +1152,7 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Unknown action" }, 400);
   } catch (err) {
     console.error("dashboard error", err);
-    if (err instanceof DashboardError) return json({ error: err.message, code: `DASH_${err.status}`, requestId }, err.status, { "X-Request-Id": requestId });
+    if (err instanceof DashboardError) return json({ error: err.message, code: err.code ?? `DASH_${err.status}`, requestId }, err.status, { "X-Request-Id": requestId });
     return json({ error: "Internal error", code: "DASH_500", requestId }, 500, { "X-Request-Id": requestId });
   }
 });
