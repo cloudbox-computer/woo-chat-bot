@@ -127,7 +127,9 @@ export default function App() {
     const wantsLogin = window.location.pathname === "/login" || params.get("login") === "1" || params.has("ticket");
     const openLogin = (plan?: "starter" | "growth" | "scale") => {
       const next = new URL(window.location.href);
-      next.pathname = "/login";
+      // Keep authentication on the SPA root. Direct /login navigation can 404 on
+      // static Vercel deployments before React gets a chance to render.
+      next.pathname = "/";
       next.searchParams.set("login", "1");
       if (plan) { next.searchParams.set("page", "billing"); next.searchParams.set("plan", plan); }
       window.history.pushState({}, "", next.pathname + next.search);
