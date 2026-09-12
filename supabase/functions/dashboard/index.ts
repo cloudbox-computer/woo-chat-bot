@@ -443,7 +443,32 @@ async function actionUpdateConfig(
     const cfg = (bot.config ?? {}) as Record<string, unknown>;
     const botPatch: Record<string, unknown> = {};
     if (typeof body.chatbotName === "string" && body.chatbotName.trim()) botPatch.name = body.chatbotName.trim();
-    if (typeof body.botActive === "boolean") botPatch.active = body.botActive;
+    if (typeof body.botActive === "boolean") {
+      if (body.botActive === true) {
+        const ent = entitlementsForTenant(ctx.tenant);
+        if (!ent.legacy && !ent.subscriptionActive) {
+          throw new DashboardError(
+            "An active subscription or trial is required to activate an assistant.",
+            402,
+            "SUBSCRIPTION_REQUIRED",
+          );
+        }
+        const activeRows = await getRows(c, "chatbots", {
+          select: "id",
+          tenant_id: `eq.${ctx.tenantId}`,
+          active: "eq.true",
+        });
+        const alreadyActive = activeRows.some((row) => String(row.id) === requestedBotId);
+        if (!alreadyActive && activeRows.length >= ent.maxAssistants) {
+          throw new DashboardError(
+            `Your ${ent.plan} plan allows ${ent.maxAssistants} active AI assistant${ent.maxAssistants === 1 ? "" : "s"}. Upgrade your plan to activate another assistant.`,
+            402,
+            "ASSISTANT_LIMIT_REACHED",
+          );
+        }
+      }
+      botPatch.active = body.botActive;
+    }
     if (body.chatbot && typeof body.chatbot === "object") {
       const cb = body.chatbot as Record<string, unknown>;
       if (typeof cb.permissions === "object" && cb.permissions !== null) {

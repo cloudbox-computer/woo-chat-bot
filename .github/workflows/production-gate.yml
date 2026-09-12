@@ -1,0 +1,69 @@
+name: Production Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            dashboard/package-lock.json
+            widget/package-lock.json
+
+      - name: Install dashboard/root dependencies
+        run: npm ci
+
+      - name: Install widget dependencies
+        run: npm ci --prefix widget
+
+      - name: Dashboard typecheck
+        run: npm run typecheck --workspace=dashboard
+
+      - name: Dashboard production build
+        run: npm run build --workspace=dashboard
+
+      - name: Widget typecheck
+        run: npm run typecheck --prefix widget
+
+      - name: Widget production build
+        run: npm run build --prefix widget
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Edge function type checks
+        run: |
+          deno check supabase/functions/chat/index.ts
+          deno check supabase/functions/dashboard/index.ts
+          deno check supabase/functions/widget-config/index.ts
+          deno check supabase/functions/stripe-webhook/index.ts
+          deno check supabase/functions/onboarding/index.ts
+
+      - name: Deterministic entitlement tests
+        run: deno run -A tests/plan-entitlements.ts
+
+      - name: Integration router tests
+        run: deno run -A tests/integration-router.ts
+
+      - name: Production readiness static checks
+        run: node scripts/production-readiness.mjs
+
+      - name: Production dependency audit
+        run: |
+          npm audit --omit=dev --audit-level=high
+          npm audit --prefix widget --omit=dev --audit-level=high
