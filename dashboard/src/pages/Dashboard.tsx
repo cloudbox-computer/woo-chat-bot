@@ -75,6 +75,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
   const [linkedTicketId, setLinkedTicketId] = React.useState<string | null>(ticketFromUrl);
   const [config, setConfig] = React.useState<ConfigData | null>(null);
   const [showTenantMenu, setShowTenantMenu] = React.useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
   const [newTenantName, setNewTenantName] = React.useState("");
   const [creating, setCreating] = React.useState(false);
@@ -91,6 +92,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
 
   function navigateToPage(nextPage: Page) {
     setPage(nextPage);
+    setMobileNavOpen(false);
     setLinkedTicketId(null);
     const url = new URL(window.location.href);
     if (nextPage === "overview") url.searchParams.delete("page");
@@ -148,8 +150,13 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
   const tenant = config?.tenant;
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={`app-shell ${mobileNavOpen ? "mobile-nav-open" : ""}`}>
+      <button
+        className={`mobile-nav-scrim ${mobileNavOpen ? "show" : ""}`}
+        aria-label="Close navigation"
+        onClick={() => setMobileNavOpen(false)}
+      />
+      <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
         <div className="brand">
           <span className="logo">◈</span> Assistant HQ
         </div>
@@ -177,6 +184,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
                     setConfig(null);
                     onTenantSelect(t.id);
                     setShowTenantMenu(false);
+                    setMobileNavOpen(false);
                   }}
                 >
                   <span>{t.name}</span>
@@ -209,13 +217,15 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
           )}
           <button 
             className="btn ghost create-tenant-btn" 
-            onClick={() => setShowCreateModal(true)}
+            onClick={() => { setMobileNavOpen(false); setShowCreateModal(true); }}
             title="Create new workspace"
           >
             + New Workspace
           </button>
           <button className="btn ghost signout" onClick={signOut}>Sign out</button>
         </div>
+
+      </aside>
 
         {/* Create Tenant Modal */}
         {showCreateModal && (
@@ -242,9 +252,24 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
             </div>
           </div>
         )}
-      </aside>
-
       <main className="main">
+        <div className="mobile-topbar">
+          <button
+            className="mobile-menu-button"
+            aria-label="Open navigation"
+            aria-expanded={mobileNavOpen}
+            onClick={() => setMobileNavOpen(true)}
+          >
+            <span></span><span></span><span></span>
+          </button>
+          <div className="mobile-topbar-brand">
+            <span className="mobile-logo">◈</span>
+            <div>
+              <strong>Assistant HQ</strong>
+              <small>{tenant?.name || "Workspace"}</small>
+            </div>
+          </div>
+        </div>
         {selectedTenantId && (
           <React.Fragment key={selectedTenantId}>
             {!pageAllowed(page, config?.entitlements) ? (
