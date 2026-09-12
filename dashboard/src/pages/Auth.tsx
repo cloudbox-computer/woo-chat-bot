@@ -40,7 +40,16 @@ export default function AuthPage() {
             We sent a confirmation link to <strong>{email}</strong>. Click it to activate your account,
             then sign in.
           </p>
-          <button className="btn secondary" style={{ width: "100%" }} onClick={() => setMode("login")}>
+          <button
+            type="button"
+            className="btn secondary"
+            style={{ width: "100%" }}
+            onClick={() => {
+              setConfirming(false);
+              setMode("login");
+              setError(null);
+            }}
+          >
             Back to sign in
           </button>
         </div>
@@ -87,6 +96,7 @@ export default function AuthPage() {
         <p className="muted" style={{ textAlign: "center", marginTop: 16, fontSize: 13 }}>
           {mode === "login" ? "Don't have an account? " : "Already have an account? "}
           <button
+            type="button"
             className="ghost"
             style={{ background: "none", border: "none", color: "var(--accent-2)", cursor: "pointer", fontWeight: 600 }}
             onClick={() => {

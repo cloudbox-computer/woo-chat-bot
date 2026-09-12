@@ -733,3 +733,199 @@ input[type="color"] {
 .usage-strip b { margin-top:4px; text-transform:capitalize; }
 @media(max-width:900px){.setup-grid{grid-template-columns:1fr 1fr}.usage-strip{grid-template-columns:1fr}}
 @media(max-width:600px){.setup-grid{grid-template-columns:1fr}}
+
+/* --------------------------------------------------------------------------
+   Laptop dashboard layout fixes — keep primary actions visible, reduce wasted
+   vertical space, and make overview cards breathe at common 1280/1366 widths.
+   -------------------------------------------------------------------------- */
+.app-shell {
+  grid-template-columns: 236px minmax(0, 1fr);
+  min-height: 100dvh;
+}
+
+.sidebar {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  padding: 14px 12px 12px;
+  gap: 0;
+}
+
+.brand {
+  flex: none;
+  padding: 2px 8px 12px;
+}
+
+.sidebar .tenant-switcher {
+  flex: none;
+  margin-bottom: 8px !important;
+}
+
+.sidebar-nav-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 3px 8px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+
+.sidebar-nav-scroll::-webkit-scrollbar { width: 6px; }
+.sidebar-nav-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 999px;
+}
+
+.nav-label {
+  padding: 8px 10px 5px;
+  font-size: 10px;
+}
+
+.nav-item {
+  min-height: 34px;
+  padding: 7px 10px;
+  line-height: 1.25;
+}
+
+.sidebar-footer {
+  flex: none;
+  display: grid;
+  gap: 7px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+.sidebar .tenant-chip {
+  padding: 8px 10px;
+}
+
+.sidebar .tenant-chip .tname,
+.sidebar .tenant-chip .tslug {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar .create-tenant-btn,
+.sidebar .signout {
+  margin: 0;
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
+.main {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding: 24px clamp(20px, 2.6vw, 36px) 48px;
+}
+
+.page-head {
+  margin-bottom: 18px;
+}
+
+.card {
+  min-width: 0;
+}
+
+.overview-setup-card {
+  margin-bottom: 18px;
+}
+
+.setup-step {
+  min-width: 0;
+  min-height: 88px;
+  padding: 13px;
+}
+
+.setup-step > div {
+  min-width: 0;
+}
+
+.setup-step b {
+  line-height: 1.25;
+}
+
+.setup-step small {
+  line-height: 1.35;
+}
+
+.usage-strip {
+  gap: 18px;
+}
+
+.overview-stats .card {
+  min-height: 108px;
+  display: flex;
+  align-items: center;
+}
+
+@media (max-width: 1280px) {
+  .setup-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-height: 760px) and (min-width: 901px) {
+  .sidebar {
+    padding-top: 10px;
+    padding-bottom: 9px;
+  }
+  .brand {
+    padding-bottom: 8px;
+  }
+  .nav-item {
+    min-height: 31px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    font-size: 13px;
+  }
+  .nav-label {
+    padding-top: 6px;
+  }
+  .sidebar .tenant-chip {
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .sidebar .create-tenant-btn,
+  .sidebar .signout {
+    min-height: 31px;
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    position: static;
+  }
+  .sidebar-nav-scroll {
+    overflow: visible;
+  }
+  .sidebar-footer {
+    border-top: 0;
+  }
+  .main {
+    padding: 20px 16px 40px;
+  }
+  .overview-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .setup-grid,
+  .overview-stats {
+    grid-template-columns: 1fr !important;
+  }
+}

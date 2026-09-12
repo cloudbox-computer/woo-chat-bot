@@ -181,31 +181,35 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
           )}
         </div>
 
-        <div className="nav-label">Manage</div>
-        {NAV.filter((n) => pageAllowed(n.id, config?.entitlements)).map((n) => (
-          <button
-            key={n.id}
-            className={`nav-item ${page === n.id ? "active" : ""}`}
-            onClick={() => navigateToPage(n.id)}
+        <div className="sidebar-nav-scroll">
+          <div className="nav-label">Manage</div>
+          {NAV.filter((n) => pageAllowed(n.id, config?.entitlements)).map((n) => (
+            <button
+              key={n.id}
+              className={`nav-item ${page === n.id ? "active" : ""}`}
+              onClick={() => navigateToPage(n.id)}
+            >
+              {n.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="sidebar-footer">
+          {tenant && (
+            <div className="tenant-chip">
+              <div className="tname">{tenant.name}</div>
+              <div className="tslug">{tenant.slug}</div>
+            </div>
+          )}
+          <button 
+            className="btn ghost create-tenant-btn" 
+            onClick={() => setShowCreateModal(true)}
+            title="Create new tenant"
           >
-            {n.label}
+            + New Tenant
           </button>
-        ))}
-        <div className="spacer" />
-        {tenant && (
-          <div className="tenant-chip">
-            <div className="tname">{tenant.name}</div>
-            <div className="tslug">{tenant.slug}</div>
-          </div>
-        )}
-        <button 
-          className="btn ghost create-tenant-btn" 
-          onClick={() => setShowCreateModal(true)}
-          title="Create new tenant"
-        >
-          + New Tenant
-        </button>
-        <button className="btn ghost signout" onClick={signOut}>Sign out</button>
+          <button className="btn ghost signout" onClick={signOut}>Sign out</button>
+        </div>
 
         {/* Create Tenant Modal */}
         {showCreateModal && (

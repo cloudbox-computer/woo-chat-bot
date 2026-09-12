@@ -42,8 +42,8 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
       {!data && !error && <Spinner />}
 
       {config?.tenant && (
-        <Card>
-          <div style={{display:"flex",justifyContent:"space-between",gap:16,alignItems:"flex-start",flexWrap:"wrap"}}>
+        <Card className="overview-setup-card">
+          <div style={{display:"flex",justifyContent:"space-between",gap:16,alignItems:"flex-start",flexWrap:"wrap"}}> 
             <div><h3 style={{margin:"0 0 6px"}}>Finish setup</h3><p className="muted" style={{margin:0}}>Your workspace is ready. Complete these steps to start serving customers.</p></div>
             {billing && <Badge tone={billing.status === "active" || billing.status === "trialing" ? "resolved" : "in_progress"}>{billing.status === "trialing" ? "14-day trial active" : billing.status === "active" ? `${billing.plan} plan active` : "Billing needs attention"}</Badge>}
           </div>
@@ -58,7 +58,7 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
       )}
 
       {stats && (
-        <div className="grid cols-4" style={{ marginBottom: 24 }}>
+        <div className="grid cols-4 overview-stats" style={{ marginBottom: 24 }}>
           {stats.map((s) => (
             <Card key={s.label}>
               <div className="stat">
