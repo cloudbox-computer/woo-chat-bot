@@ -17,7 +17,7 @@ type Page = "overview" | "chatbot" | "knowledge" | "tickets" | "integrations" | 
 
 const NAV: Array<{ id: Page; label: string }> = [
   { id: "overview", label: "Overview" },
-  { id: "chatbot", label: "Chatbot" },
+  { id: "chatbot", label: "AI Assistants" },
   { id: "knowledge", label: "Knowledge" },
   { id: "tickets", label: "Tickets" },
   { id: "integrations", label: "Integrations" },
@@ -129,6 +129,12 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
         const tenantsRes = await listTenants();
         const newTenant = tenantsRes.tenants.find(t => t.slug === result.slug || t.name === newTenantName.trim());
         const tenantId = newTenant?.id ?? result.tenantId;
+        // A new workspace has its own onboarding + subscription. Strip any
+        // Stripe success/cancel state belonging to the previous workspace.
+        const nextUrl = new URL(window.location.href);
+        ["onboarding_checkout", "billing", "plan", "session_id", "welcome", "page", "ticket"].forEach((key) => nextUrl.searchParams.delete(key));
+        nextUrl.searchParams.set("tenant", tenantId);
+        window.history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}`);
         // Notify parent to switch to onboarding
         onTenantCreated?.(tenantId);
       }
@@ -204,9 +210,9 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
           <button 
             className="btn ghost create-tenant-btn" 
             onClick={() => setShowCreateModal(true)}
-            title="Create new tenant"
+            title="Create new workspace"
           >
-            + New Tenant
+            + New Workspace
           </button>
           <button className="btn ghost signout" onClick={signOut}>Sign out</button>
         </div>
@@ -215,11 +221,11 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
         {showCreateModal && (
           <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
             <div className="modal" onClick={(e) => e.stopPropagation()}>
-              <h2 style={{ margin: '0 0 16px' }}>Create New Tenant</h2>
-              <p className="desc" style={{ margin: '0 0 16px' }}>Enter a name for your new assistant instance.</p>
+              <h2 style={{ margin: '0 0 16px' }}>Create New Workspace</h2>
+              <p className="desc" style={{ margin: '0 0 16px' }}>Create a separate business workspace. Each workspace has its own subscription and assistant allowance.</p>
               <input
                 type="text"
-                placeholder="e.g., Acme Shoes Store"
+                placeholder="e.g., Acme Ltd"
                 value={newTenantName}
                 onChange={(e) => setNewTenantName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleCreateTenant(); }}
@@ -230,7 +236,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
               <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
                 <button className="btn ghost" onClick={() => setShowCreateModal(false)}>Cancel</button>
                 <button className="btn primary" onClick={handleCreateTenant} disabled={creating || !newTenantName.trim()}>
-                  {creating ? 'Creating...' : 'Create Tenant'}
+                  {creating ? 'Creating...' : 'Create Workspace'}
                 </button>
               </div>
             </div>
@@ -245,7 +251,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
               <div className="page"><div className="card"><h1>Upgrade required</h1><p className="desc">This feature is available on the {requiredPlanForPage(page, config?.entitlements)} plan.</p><button className="btn primary" onClick={()=>navigateToPage("billing")}>View plans</button></div></div>
             ) : (<>
               {page === "overview" && <Overview tenantId={selectedTenantId} config={config} onNavigate={(next)=>navigateToPage(next)} />}
-              {page === "chatbot" && <ChatbotPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} />}
+              {page === "chatbot" && <ChatbotPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} onUpgrade={()=>navigateToPage("billing")} />}
               {page === "knowledge" && <KnowledgePage tenantId={selectedTenantId} />}
               {page === "tickets" && <TicketsPage tenantId={selectedTenantId} selectedTicketId={linkedTicketId} />}
               {page === "integrations" && <IntegrationsPage tenantId={selectedTenantId} entitlements={config?.entitlements ?? null} onUpgrade={()=>navigateToPage("billing")} />}

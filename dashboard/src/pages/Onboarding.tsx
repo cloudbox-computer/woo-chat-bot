@@ -149,7 +149,7 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
       // tenants are always reused by the backend.
       let onboardingTenantId = tenantId ?? null;
       if (!onboardingTenantId) {
-        const tenantResult = await createTenant(state.name.trim());
+        const tenantResult = await createTenant(state.name.trim(), true);
         onboardingTenantId = tenantResult.tenantId;
       }
       if (!onboardingTenantId) throw new Error("Unable to resolve onboarding tenant");

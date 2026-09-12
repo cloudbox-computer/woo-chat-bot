@@ -114,9 +114,31 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
 
   const chatbot = await db.resolveChatbot(req.chatbotId);
   if (!chatbot) throw new AgentError(`Unknown or inactive chatbot: ${req.chatbotId}`, 404);
-  const tenant = await db.getTenantByChatbot(chatbot.id);
-  if (!tenant) throw new AgentError(`No tenant for chatbot: ${req.chatbotId}`, 404);
+  const baseTenant = await db.getTenantByChatbot(chatbot.id);
+  if (!baseTenant) throw new AgentError(`No tenant for chatbot: ${req.chatbotId}`, 404);
   const chatbotId = chatbot.id;
+
+  // Assistant-specific identity/scope overrides live on chatbots.config.
+  // Tenant-level values remain the default for migrated/legacy assistants.
+  const botCfg = chatbot.config ?? {};
+  const configuredTopics = Array.isArray(botCfg.allowedTopics)
+    ? botCfg.allowedTopics.map((x) => String(x).trim()).filter(Boolean)
+    : baseTenant.policy?.allowedTopics ?? [];
+  const configuredLevel = botCfg.securityLevel;
+  const tenant = {
+    ...baseTenant,
+    welcomeMessage: typeof botCfg.welcome === "string" ? botCfg.welcome : baseTenant.welcomeMessage,
+    assistantHeaderMessage: typeof botCfg.assistantHeaderMessage === "string" ? botCfg.assistantHeaderMessage : baseTenant.assistantHeaderMessage,
+    tone: typeof botCfg.tone === "string" ? botCfg.tone : baseTenant.tone,
+    policy: {
+      allowedTopics: configuredTopics,
+      refusalMessage: typeof botCfg.refusalMessage === "string" && botCfg.refusalMessage.trim()
+        ? botCfg.refusalMessage.trim()
+        : baseTenant.policy?.refusalMessage ?? `I'm sorry, I can only help with ${baseTenant.name} and enquiries related to this business.`,
+      securityLevel: configuredLevel === "standard" || configuredLevel === "extra-strict" ? configuredLevel : baseTenant.policy?.securityLevel ?? "strict",
+      useModelClassifier: baseTenant.policy?.useModelClassifier ?? true,
+    },
+  };
 
   const policy = buildPolicy(tenant);
   const priorConversationId = req.conversationId ?? "";

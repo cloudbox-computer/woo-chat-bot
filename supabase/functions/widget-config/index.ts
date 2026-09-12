@@ -52,12 +52,12 @@ function publicConfig(
     chatbotId: bot.id,
     active: true,
     name: bot.name,
-    title: tenant.name || bot.name,
-    // subtitle = welcome message (first chat bubble). assistantHeaderMessage
-    // is shown in the widget header under the title so they don't duplicate.
-    subtitle: tenant.welcomeMessage ?? null,
-    assistantHeaderMessage: tenant.assistantHeaderMessage ?? null,
-    brandColour: tenant.brandColour ?? null,
+    title: bot.name || tenant.name,
+    // Presentation can be independently configured per assistant. Legacy
+    // assistants fall back to workspace defaults.
+    subtitle: typeof bot.config?.welcome === "string" ? bot.config.welcome : tenant.welcomeMessage ?? null,
+    assistantHeaderMessage: typeof bot.config?.assistantHeaderMessage === "string" ? bot.config.assistantHeaderMessage : tenant.assistantHeaderMessage ?? null,
+    brandColour: typeof bot.config?.brandColour === "string" ? bot.config.brandColour : tenant.brandColour ?? null,
     storeUrl: tenant.storeUrl ?? null,
     // GDPR: public privacy-policy URL so the widget can link to it.
     privacyPolicyUrl: tenant.privacyPolicyUrl ?? null,

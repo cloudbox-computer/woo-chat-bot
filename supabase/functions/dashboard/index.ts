@@ -72,6 +72,15 @@ function fallbackPublicId(b: Record<string, unknown>): string {
   return `cb_${id}`.slice(0, 32);
 }
 
+function assistantPublicId(): string {
+  return `cb_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+
+function assistantInternalId(tenantSlug: string, name: string): string {
+  const base = slugify(name) || "assistant";
+  return `${tenantSlug}-${base}-${crypto.randomUUID().slice(0, 8)}`.slice(0, 120);
+}
+
 // ---------------------------------------------------------------------------
 // list_tenants — return all tenants the user is a member of
 // ---------------------------------------------------------------------------
@@ -114,6 +123,7 @@ async function actionCreateTenant(req: Request) {
 
   const body = (await req.json().catch(() => ({}))) as {
     name?: string;
+    reuseIncomplete?: boolean;
   };
 
   const name = String(body.name ?? "").trim();
@@ -124,9 +134,10 @@ async function actionCreateTenant(req: Request) {
 
   const { url, serviceRoleKey } = supabaseConfig();
 
-  const rpcUrl =
-    `${url.replace(/\/+$/g, "")}` +
-    `/rest/v1/rpc/create_or_reuse_onboarding_tenant`;
+  const rpcName = body.reuseIncomplete === true
+    ? "create_or_reuse_onboarding_tenant"
+    : "create_workspace_for_user";
+  const rpcUrl = `${url.replace(/\/+$/g, "")}/rest/v1/rpc/${rpcName}`;
 
   const rpc = await fetch(rpcUrl, {
     method: "POST",
@@ -144,7 +155,7 @@ async function actionCreateTenant(req: Request) {
   const raw = await rpc.text();
 
   if (!rpc.ok) {
-    console.error("create_or_reuse_onboarding_tenant RPC failed", {
+    console.error("workspace creation RPC failed", {
       status: rpc.status,
       response: raw,
       userId: user.id,
@@ -307,19 +318,27 @@ async function actionGetConfig(ctx: Awaited<ReturnType<typeof resolveDashboardCo
       autoTicketCategories: tenant.auto_ticket_categories ?? [],
       onboardingComplete: tenant.onboarding_complete === true,
     },
-    chatbots: botRows.map((b) => ({
-      id: b.id,
-      publicId: typeof b.public_id === "string" ? b.public_id : null,
-      name: b.name,
-      active: b.active === true,
-      config: (b.config ?? {}) as Record<string, unknown>,
-    })),
+    chatbots: botRows.map((b) => {
+      const publicId = typeof b.public_id === "string" && b.public_id
+        ? b.public_id
+        : fallbackPublicId(b);
+      return {
+        id: b.id,
+        publicId,
+        name: b.name,
+        active: b.active === true,
+        config: (b.config ?? {}) as Record<string, unknown>,
+        embedScript: embedScriptFor(publicId),
+      };
+    }),
     entitlements: entitlementsForTenant(ctx.tenant),
-    embedScript: embedScriptFor(
-      typeof botRows[0]?.public_id === "string" && botRows[0].public_id
-        ? botRows[0].public_id
-        : fallbackPublicId(botRows[0] ?? {}),
-    ),
+    embedScript: botRows[0]
+      ? embedScriptFor(
+          typeof botRows[0]?.public_id === "string" && botRows[0].public_id
+            ? botRows[0].public_id
+            : fallbackPublicId(botRows[0] ?? {}),
+        )
+      : null,
   });
 }
 
@@ -408,56 +427,137 @@ async function actionUpdateConfig(
     await write(c, "PATCH", `tenants?id=eq.${ctx.tenantId}`, patch);
   }
 
-  // Chatbot updates: name / active / welcome / tone go to the chatbot config.
+  // Assistant updates are targeted to one chatbot. Never fan out a single
+  // assistant edit across every chatbot in the workspace.
   if (typeof body.chatbotName === "string" || typeof body.botActive === "boolean" || body.chatbot) {
+    const requestedBotId = str(body.chatbotId);
+    if (!requestedBotId) throw new DashboardError("chatbotId is required for assistant updates", 400);
     const botRows = await getRows(c, "chatbots", {
       select: "id,config",
+      id: `eq.${requestedBotId}`,
       tenant_id: `eq.${ctx.tenantId}`,
+      limit: "1",
     });
-    for (const bot of botRows) {
-      const cfg = (bot.config ?? {}) as Record<string, unknown>;
-      const botPatch: Record<string, unknown> = {};
-      if (typeof body.chatbotName === "string" && body.chatbotName.trim()) {
-        botPatch.name = body.chatbotName.trim();
+    const bot = botRows[0];
+    if (!bot) throw new DashboardError("Assistant not found", 404);
+    const cfg = (bot.config ?? {}) as Record<string, unknown>;
+    const botPatch: Record<string, unknown> = {};
+    if (typeof body.chatbotName === "string" && body.chatbotName.trim()) botPatch.name = body.chatbotName.trim();
+    if (typeof body.botActive === "boolean") botPatch.active = body.botActive;
+    if (body.chatbot && typeof body.chatbot === "object") {
+      const cb = body.chatbot as Record<string, unknown>;
+      if (typeof cb.permissions === "object" && cb.permissions !== null) {
+        requirePlanFeature(ctx.tenant, "advancedPermissions");
+        cfg.permissions = cb.permissions;
       }
-      if (typeof body.botActive === "boolean") botPatch.active = body.botActive;
-      if (body.chatbot && typeof body.chatbot === "object") {
-        const cb = body.chatbot as Record<string, unknown>;
-        if (typeof cb.permissions === "object" && cb.permissions !== null) {
-          requirePlanFeature(ctx.tenant, "advancedPermissions");
-          cfg.permissions = cb.permissions;
-        }
-        if (typeof cb.welcome === "string") cfg.welcome = cb.welcome;
-        if (typeof cb.tone === "string") cfg.tone = cb.tone;
-        if ("avatar_url" in cb) cfg.avatar_url = cb.avatar_url;
-        if (Array.isArray(cb.quickActions)) {
-          cfg.quickActions = cb.quickActions.slice(0, 8).map((item) => {
-            if (typeof item === "string") {
-              const text = item.trim();
-              return text ? { label: text, prompt: text } : null;
-            }
-            if (!item || typeof item !== "object") return null;
-            const row = item as Record<string, unknown>;
-            const label = typeof row.label === "string" ? row.label.trim() : "";
-            const prompt = typeof row.prompt === "string" ? row.prompt.trim() : label;
-            return label ? { label, prompt: prompt || label } : null;
-          }).filter(Boolean);
-        }
-        botPatch.config = cfg;
+      for (const key of ["welcome", "assistantHeaderMessage", "tone", "refusalMessage", "securityLevel", "brandColour"] as const) {
+        if (typeof cb[key] === "string") cfg[key] = cb[key];
       }
-      if (Object.keys(botPatch).length) {
-        await write(c, "PATCH", `chatbots?id=eq.${bot.id}`, botPatch);
+      if (typeof cb.brandColour === "string" && cb.brandColour.trim() && !HEX_RE.test(cb.brandColour.trim())) {
+        throw new DashboardError("Brand colour must be a hex value", 400);
       }
+      if (Array.isArray(cb.allowedTopics)) {
+        cfg.allowedTopics = cb.allowedTopics.map((topic) => String(topic).trim()).filter(Boolean).slice(0, 100);
+      }
+      if ("avatar_url" in cb) cfg.avatar_url = cb.avatar_url;
+      if (Array.isArray(cb.quickActions)) {
+        cfg.quickActions = cb.quickActions.slice(0, 8).map((item) => {
+          if (typeof item === "string") {
+            const text = item.trim();
+            return text ? { label: text, prompt: text } : null;
+          }
+          if (!item || typeof item !== "object") return null;
+          const row = item as Record<string, unknown>;
+          const label = typeof row.label === "string" ? row.label.trim() : "";
+          const prompt = typeof row.prompt === "string" ? row.prompt.trim() : label;
+          return label ? { label, prompt: prompt || label } : null;
+        }).filter(Boolean);
+      }
+      botPatch.config = cfg;
     }
+    await write(c, "PATCH", `chatbots?id=eq.${requestedBotId}&tenant_id=eq.${ctx.tenantId}`, botPatch);
   }
 
   return json({ ok: true });
 }
 
 // ---------------------------------------------------------------------------
+// assistants — workspace chatbot CRUD
+// ---------------------------------------------------------------------------
+async function actionAssistants(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>, req: Request, url: URL) {
+  const c = client();
+  const method = req.method.toUpperCase();
+  const ent = entitlementsForTenant(ctx.tenant);
+
+  if (method === "GET") {
+    const rows = await getRows(c, "chatbots", {
+      select: "id,public_id,name,active,config,created_at",
+      tenant_id: `eq.${ctx.tenantId}`,
+      order: "created_at.asc",
+    });
+    return json({
+      items: rows.map((row) => {
+        const publicId = typeof row.public_id === "string" && row.public_id ? row.public_id : fallbackPublicId(row);
+        return { ...row, publicId, embedScript: embedScriptFor(publicId) };
+      }),
+      maxAssistants: ent.maxAssistants,
+      activeCount: rows.filter((row) => row.active === true).length,
+    });
+  }
+
+  requireDashboardRole(ctx, "admin");
+
+  if (method === "POST") {
+    if (!ent.legacy && !ent.subscriptionActive) {
+      throw new DashboardError("An active subscription or trial is required to create assistants.", 402, "SUBSCRIPTION_REQUIRED");
+    }
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) throw new DashboardError("Assistant name is required", 400);
+    const activeCountRows = await getRows(c, "chatbots", { select: "id", tenant_id: `eq.${ctx.tenantId}`, active: "eq.true" });
+    if (activeCountRows.length >= ent.maxAssistants) {
+      throw new DashboardError(`Your ${ent.plan} plan allows ${ent.maxAssistants} active AI assistant${ent.maxAssistants === 1 ? "" : "s"}. Upgrade your plan to activate another assistant.`, 402, "ASSISTANT_LIMIT_REACHED");
+    }
+    const tenantRows = await getRows(c, "tenants", { select: "slug,welcome_message,assistant_header_message,tone,brand_colour,scope,refusal_message", id: `eq.${ctx.tenantId}`, limit: "1" });
+    const tenant = tenantRows[0] ?? {};
+    const scope = tenant.scope && typeof tenant.scope === "object" ? tenant.scope as Record<string, unknown> : {};
+    const id = assistantInternalId(String(tenant.slug ?? "workspace"), name);
+    const publicId = assistantPublicId();
+    const config = {
+      welcome: tenant.welcome_message ?? "",
+      assistantHeaderMessage: tenant.assistant_header_message ?? "",
+      tone: tenant.tone ?? "friendly and helpful",
+      allowedTopics: Array.isArray(scope.allowedTopics) ? scope.allowedTopics : [],
+      securityLevel: scope.securityLevel ?? "strict",
+      refusalMessage: tenant.refusal_message ?? "",
+      brandColour: tenant.brand_colour ?? "",
+      quickActions: [],
+    };
+    const res = await write(c, "POST", "chatbots", { id, tenant_id: ctx.tenantId, public_id: publicId, name, active: true, config }, "return=representation");
+    const created = (await res.json()) as Record<string, unknown>[];
+    await audit(ctx, "assistant.created", "chatbot", id);
+    return json({ item: { ...(created[0] ?? {}), publicId, embedScript: embedScriptFor(publicId) } }, 201);
+  }
+
+  if (method === "DELETE") {
+    const id = url.searchParams.get("id")?.trim();
+    if (!id) throw new DashboardError("id is required", 400);
+    const rows = await getRows(c, "chatbots", { select: "id", id: `eq.${id}`, tenant_id: `eq.${ctx.tenantId}`, limit: "1" });
+    if (!rows[0]) throw new DashboardError("Assistant not found", 404);
+    const all = await getRows(c, "chatbots", { select: "id", tenant_id: `eq.${ctx.tenantId}` });
+    if (all.length <= 1) throw new DashboardError("A workspace must keep at least one assistant", 400);
+    await write(c, "DELETE", `chatbots?id=eq.${id}&tenant_id=eq.${ctx.tenantId}`, {});
+    await audit(ctx, "assistant.deleted", "chatbot", id);
+    return json({ ok: true });
+  }
+
+  throw new DashboardError("Method not allowed", 405);
+}
+
+// ---------------------------------------------------------------------------
 // knowledge — CRUD
 // ---------------------------------------------------------------------------
-async function actionListKnowledge(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>) {
+async function actionListKnowledge(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>, url: URL) {
   const c = client();
   const botRows = await getRows(c, "chatbots", {
     select: "id",
@@ -465,9 +565,11 @@ async function actionListKnowledge(ctx: Awaited<ReturnType<typeof resolveDashboa
   });
   const botIds = botRows.map((b) => String(b.id));
   if (!botIds.length) return json({ items: [] });
+  const requestedBotId = url.searchParams.get("chatbotId")?.trim();
+  if (requestedBotId && !botIds.includes(requestedBotId)) throw new DashboardError("Assistant not found", 404);
   const items = await getRows(c, "knowledge", {
     select: "id,title,content,keywords,chatbot_id,created_at",
-    chatbot_id: `in.(${botIds.join(",")})`,
+    chatbot_id: requestedBotId ? `eq.${requestedBotId}` : `in.(${botIds.join(",")})`,
     order: "created_at.desc",
     limit: "500",
   });
@@ -484,12 +586,16 @@ async function actionAddKnowledge(
   if (!title || !content) throw new DashboardError("title and content are required");
 
   const c = client();
+  const requestedBotId = typeof body.chatbotId === "string" ? body.chatbotId.trim() : "";
+  if (!requestedBotId) throw new DashboardError("chatbotId is required", 400);
   const botRows = await getRows(c, "chatbots", {
     select: "id",
+    id: `eq.${requestedBotId}`,
     tenant_id: `eq.${ctx.tenantId}`,
+    limit: "1",
   });
-  if (!botRows.length) throw new DashboardError("No chatbot for this tenant", 400);
-  const chatbotId = String(botRows[0].id);
+  if (!botRows.length) throw new DashboardError("Assistant not found", 404);
+  const chatbotId = requestedBotId;
   const res = await write(
     c,
     "POST",
@@ -1124,6 +1230,7 @@ Deno.serve(async (req: Request) => {
     if (action === "takeover" && method === "POST") return await actionTakeover(ctx, req);
     if (action === "agent_message" && method === "POST") return await actionAgentMessage(ctx, req);
     if (action === "gdpr" && method === "POST") return await actionGdpr(ctx, req);
+    if (action === "assistants") return await actionAssistants(ctx, req, url);
     if (action === "config") {
       if (method === "GET") return await actionGetConfig(ctx);
       if (method === "PUT" || method === "PATCH") {
@@ -1132,7 +1239,7 @@ Deno.serve(async (req: Request) => {
       }
     }
     if (action === "knowledge") {
-      if (method === "GET") return await actionListKnowledge(ctx);
+      if (method === "GET") return await actionListKnowledge(ctx, url);
       requireDashboardRole(ctx, "admin");
       if (method === "POST") return await actionAddKnowledge(ctx, req);
       if (method === "PUT" || method === "PATCH") return await actionUpdateKnowledge(ctx, req, url);

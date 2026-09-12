@@ -91,7 +91,7 @@ export interface OnboardingResult {
   slug: string;
   chatbotId: string;
   publicId: string;
-  embedScript: string;
+  embedScript: string | null;
   next: string;
 }
 
@@ -151,6 +151,8 @@ export interface ChatbotInfo {
   name: string;
   active: boolean;
   config: Record<string, unknown>;
+  embedScript?: string;
+  created_at?: string;
 }
 
 export interface PlanEntitlements {
@@ -174,7 +176,7 @@ export interface ConfigData {
   tenant: TenantConfig;
   chatbots: ChatbotInfo[];
   entitlements: PlanEntitlements;
-  embedScript: string;
+  embedScript: string | null;
 }
 
 export interface KnowledgeItem {
@@ -260,17 +262,33 @@ export function listTenants(): Promise<{ tenants: TenantSummary[] }> {
   return request<{ tenants: TenantSummary[] }>("/dashboard?action=tenants");
 }
 
-export function createTenant(name: string): Promise<{ ok: boolean; tenantId: string; slug: string }> {
+export function createTenant(name: string, reuseIncomplete = false): Promise<{ ok: boolean; tenantId: string; slug: string }> {
   return request<{ ok: boolean; tenantId: string; slug: string }>('/dashboard?action=tenants', {
     method: 'POST',
+    body: JSON.stringify({ name, reuseIncomplete }),
+  });
+}
+
+export function listAssistants(tenantId: string): Promise<{ items: ChatbotInfo[]; maxAssistants: number; activeCount: number }> {
+  return request(`/dashboard${tenantQuery(tenantId, "assistants")}`);
+}
+
+export function createAssistant(tenantId: string, name: string): Promise<{ item: ChatbotInfo }> {
+  return request(`/dashboard${tenantQuery(tenantId, "assistants")}`, {
+    method: "POST",
     body: JSON.stringify({ name }),
   });
 }
-export function listKnowledge(tenantId: string): Promise<{ items: KnowledgeItem[] }> {
-  return request<{ items: KnowledgeItem[] }>(`/dashboard${tenantQuery(tenantId, "knowledge")}`);
+
+export function deleteAssistant(tenantId: string, id: string): Promise<{ ok: boolean }> {
+  return request(`/dashboard${tenantQuery(tenantId, "assistants", { id })}`, { method: "DELETE" });
+}
+export function listKnowledge(tenantId: string, chatbotId?: string): Promise<{ items: KnowledgeItem[] }> {
+  return request<{ items: KnowledgeItem[] }>(`/dashboard${tenantQuery(tenantId, "knowledge", chatbotId ? { chatbotId } : undefined)}`);
 }
 
 export function addKnowledge(tenantId: string, item: {
+  chatbotId: string;
   title: string;
   content: string;
   keywords?: string[];

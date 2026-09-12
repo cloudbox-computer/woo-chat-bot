@@ -147,6 +147,7 @@ export async function createCheckoutSession(ctx: DashboardContext, requestedPlan
       // Stripe requires Checkout to be allowed to update an existing
       // customer's business name when tax ID collection is enabled.
       "customer_update[name]": "auto",
+      "customer_update[address]": "auto",
       "automatic_tax[enabled]": automaticTax,
       "tax_id_collection[enabled]": true,
       "metadata[tenant_id]": ctx.tenantId,
