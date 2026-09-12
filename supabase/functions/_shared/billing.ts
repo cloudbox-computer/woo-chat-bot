@@ -144,6 +144,9 @@ export async function createCheckoutSession(ctx: DashboardContext, requestedPlan
       "line_items[0][quantity]": 1,
       allow_promotion_codes: true,
       billing_address_collection: "auto",
+      // Stripe requires Checkout to be allowed to update an existing
+      // customer's business name when tax ID collection is enabled.
+      "customer_update[name]": "auto",
       "automatic_tax[enabled]": automaticTax,
       "tax_id_collection[enabled]": true,
       "metadata[tenant_id]": ctx.tenantId,

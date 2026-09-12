@@ -69,12 +69,15 @@ export interface OnboardingInput {
   securityLevel?: "standard" | "strict" | "extra-strict";
   knowledge?: OnboardingKnowledge[];
   integrations?: Array<{
-    provider: "woocommerce" | "supabase";
+    provider: "woocommerce" | "supabase" | "resend";
     credentials: {
-      url: string;
+      url?: string;
       consumer_key?: string;
       consumer_secret?: string;
       anon_key?: string;
+      api_key?: string;
+      from_email?: string;
+      from_name?: string;
     };
   }>;
   defaultTicketPriority?: string;

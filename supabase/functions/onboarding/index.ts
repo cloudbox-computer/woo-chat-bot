@@ -30,7 +30,7 @@ interface WizardKnowledge {
   keywords?: string[];
 }
 interface WizardIntegration {
-  provider: "woocommerce" | "supabase";
+  provider: "woocommerce" | "supabase" | "resend";
   credentials: Record<string, unknown>;
 }
 
@@ -257,9 +257,14 @@ export async function handleOnboarding(req: Request): Promise<Response> {
   // creating another row.
   const integrations = Array.isArray(body.integrations) ? body.integrations as WizardIntegration[] : [];
   for (const integ of integrations) {
-    if ((integ.provider === "woocommerce" || integ.provider === "supabase") && integ.credentials && typeof integ.credentials === "object") {
+    if (
+      (integ.provider === "woocommerce" || integ.provider === "supabase" || integ.provider === "resend") &&
+      integ.credentials &&
+      typeof integ.credentials === "object"
+    ) {
       const raw = integ.credentials as Record<string, unknown>;
       let credentials: Record<string, unknown>;
+
       if (integ.provider === "woocommerce") {
         const url = String(raw.url ?? "").trim();
         const key = String(raw.consumer_key ?? "").trim();
@@ -271,7 +276,7 @@ export async function handleOnboarding(req: Request): Promise<Response> {
           consumer_secret: await encryptSecret(secret),
           webhook_secret: raw.webhook_secret ? await encryptSecret(String(raw.webhook_secret)) : undefined,
         };
-      } else {
+      } else if (integ.provider === "supabase") {
         const url = String(raw.url ?? "").trim();
         const anonKey = String(raw.anon_key ?? "").trim();
         if (!url || !anonKey) throw new DashboardError("Supabase project URL and anon key are required");
@@ -281,7 +286,19 @@ export async function handleOnboarding(req: Request): Promise<Response> {
           query_policy: raw.query_policy && typeof raw.query_policy === "object" ? raw.query_policy : undefined,
           capability_config: raw.capability_config && typeof raw.capability_config === "object" ? raw.capability_config : undefined,
         };
+      } else {
+        const apiKey = String(raw.api_key ?? "").trim();
+        const fromEmail = String(raw.from_email ?? "").trim();
+        const fromName = String(raw.from_name ?? "").trim();
+        if (!apiKey || !fromEmail) throw new DashboardError("Resend API key and From email are required");
+        if (!EMAIL_RE.test(fromEmail)) throw new DashboardError("Resend From email must be a valid email address");
+        credentials = {
+          api_key: await encryptSecret(apiKey),
+          from_email: fromEmail,
+          from_name: fromName || undefined,
+        };
       }
+
       const res = await fetch(`${base}/integrations?on_conflict=tenant_id,provider`, {
         method: "POST",
         headers: { ...headers, Prefer: "resolution=merge-duplicates,return=minimal" },

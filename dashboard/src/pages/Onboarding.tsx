@@ -3,18 +3,17 @@ import { runOnboarding, analyzeWebsite, createTenant, createBillingCheckout, get
 import { supabase } from "../lib/supabase";
 import { toast } from "../components/ui";
 
-// 7-step onboarding wizard (convo3.md §Onboarding).
-// Each step maps to a portion of the OnboardingInput payload; step 7 (Install)
-// shows the embed script once onboarding completes.
+// 7-step onboarding wizard. Plan selection happens before plan-gated integrations
+// so the service step can accurately show what the selected plan includes.
 
 const STEPS = [
   "Business",
   "Assistant",
   "Strict scope",
   "Knowledge",
-  "Integrations",
   "Support",
   "Plan",
+  "Integrations",
 ];
 
 
@@ -46,6 +45,9 @@ interface WizardState {
   wooSecret: string;
   supaUrl: string;
   supaAnonKey: string;
+  resendApiKey: string;
+  resendFromEmail: string;
+  resendFromName: string;
   supportEmail: string;
   ticketPrefix: string;
   defaultTicketPriority: string;
@@ -71,6 +73,9 @@ const initial: WizardState = {
   wooSecret: "",
   supaUrl: "",
   supaAnonKey: "",
+  resendApiKey: "",
+  resendFromEmail: "",
+  resendFromName: "",
   supportEmail: "",
   ticketPrefix: "",
   defaultTicketPriority: "normal",
@@ -98,7 +103,7 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
   const resumeCheckout = !!tenantId && (checkoutState === "cancelled" || checkoutState === "success");
 
   React.useEffect(() => {
-    if (resumeCheckout) setStep(6);
+    if (resumeCheckout) setStep(5);
   }, [resumeCheckout]);
 
   React.useEffect(() => {
@@ -168,7 +173,17 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
           content: k.content.trim(),
         })),
         integrations: [
-          ...(state.wooUrl && state.wooKey && state.wooSecret
+          ...(state.resendApiKey.trim() && state.resendFromEmail.trim()
+            ? [{
+                provider: "resend" as const,
+                credentials: {
+                  api_key: state.resendApiKey.trim(),
+                  from_email: state.resendFromEmail.trim(),
+                  from_name: state.resendFromName.trim() || undefined,
+                },
+              }]
+            : []),
+          ...(selectedPlan !== "starter" && state.wooUrl.trim() && state.wooKey.trim() && state.wooSecret.trim()
             ? [{
                 provider: "woocommerce" as const,
                 credentials: {
@@ -178,7 +193,7 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
                 },
               }]
             : []),
-          ...(state.supaUrl.trim()
+          ...(selectedPlan !== "starter" && state.supaUrl.trim() && state.supaAnonKey.trim()
             ? [{
                 provider: "supabase" as const,
                 credentials: {
@@ -205,18 +220,6 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
     }
   }
 
-  async function resumeStripeCheckout() {
-    if (!tenantId) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const checkout = await createBillingCheckout(tenantId, selectedPlan, "onboarding");
-      window.location.assign(checkout.url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not open Stripe Checkout");
-      setBusy(false);
-    }
-  }
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -261,9 +264,24 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
     }
   }
 
+  const supportEmailValid =
+    state.supportEmail.trim().length === 0 || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(state.supportEmail);
+  const resendComplete =
+    (!state.resendApiKey.trim() && !state.resendFromEmail.trim()) ||
+    (!!state.resendApiKey.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(state.resendFromEmail.trim()));
+  const wooComplete =
+    selectedPlan === "starter" ||
+    (!state.wooUrl.trim() && !state.wooKey.trim() && !state.wooSecret.trim()) ||
+    (!!state.wooUrl.trim() && !!state.wooKey.trim() && !!state.wooSecret.trim());
+  const supabaseComplete =
+    selectedPlan === "starter" ||
+    (!state.supaUrl.trim() && !state.supaAnonKey.trim()) ||
+    (!!state.supaUrl.trim() && !!state.supaAnonKey.trim());
+
   const canNext =
     step === 0 ? state.name.trim().length > 0 :
-    step === 5 ? state.supportEmail.trim().length === 0 || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(state.supportEmail) :
+    step === 4 ? supportEmailValid :
+    step === 6 ? resendComplete && wooComplete && supabaseComplete :
     true;
 
   return (
@@ -459,63 +477,16 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
 
         {step === 4 && (
           <>
-            <h2>Connect your store</h2>
-            <p className="step-desc">
-              Connect your WooCommerce store and/or Supabase database. Optional — you can connect later.
-            </p>
-
-            {/* WooCommerce */}
-            <div style={{ marginBottom: 24 }}>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>WooCommerce</div>
-              <div className="field">
-                <label>Store URL</label>
-                <input type="url" value={state.wooUrl} onChange={(e) => set("wooUrl", e.target.value)} placeholder="https://example.com" />
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div className="field">
-                  <label>Consumer key</label>
-                  <input type="text" value={state.wooKey} onChange={(e) => set("wooKey", e.target.value)} placeholder="ck_…" />
-                </div>
-                <div className="field">
-                  <label>Consumer secret</label>
-                  <input type="password" value={state.wooSecret} onChange={(e) => set("wooSecret", e.target.value)} placeholder="cs_…" />
-                </div>
-              </div>
-              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                Create these in WooCommerce → Settings → Advanced → REST API.
-              </p>
-            </div>
-
-            {/* Supabase */}
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>Supabase (optional)</div>
-              <div className="field">
-                <label>Project URL</label>
-                <input type="url" value={state.supaUrl} onChange={(e) => set("supaUrl", e.target.value)} placeholder="https://xyz.supabase.co" />
-              </div>
-              <div className="field">
-                <label>Anon Key</label>
-                <input type="password" value={state.supaAnonKey} onChange={(e) => set("supaAnonKey", e.target.value)} placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." />
-              </div>
-              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                Find these in Supabase Dashboard → Settings → API. The anon key is required for the assistant to query your tables.
-              </p>
-            </div>
-          </>
-        )}
-
-        {step === 5 && (
-          <>
             <h2>Support & tickets</h2>
             <p className="step-desc">Where support tickets go and how they're organised.</p>
             <div className="field">
               <label>Support email</label>
-              <input type="email" value={state.supportEmail} onChange={(e) => set("supportEmail", e.target.value)} placeholder="support@yourstore.com" />
+              <input type="email" value={state.supportEmail} onChange={(e) => set("supportEmail", e.target.value)} placeholder="support@yourstore.com" autoComplete="email" />
               <div className="hint">Tickets created by customers are emailed here.</div>
             </div>
             <div className="field">
               <label>Ticket reference prefix</label>
-              <input type="text" value={state.ticketPrefix} onChange={(e) => set("ticketPrefix", e.target.value)} placeholder="IP" maxLength={4} />
+              <input type="text" value={state.ticketPrefix} onChange={(e) => set("ticketPrefix", e.target.value)} placeholder="IP" maxLength={4} autoComplete="off" />
               <div className="hint">e.g. IP → IP-2026-000001. 1-4 letters/numbers.</div>
             </div>
             <div className="field">
@@ -531,21 +502,22 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
                 value={state.autoTicketCategories.join(", ")}
                 onChange={(e) => set("autoTicketCategories", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))}
                 placeholder="damaged, refund, order query"
+                autoComplete="off"
               />
               <div className="hint">Comma-separated. The assistant categorises tickets automatically.</div>
             </div>
           </>
         )}
 
-        {step === 6 && (
+        {step === 5 && (
           <>
             <h2>{checkoutState === "success" ? "Activating your workspace…" : "Choose your plan"}</h2>
             <p className="step-desc">
               {checkoutState === "success"
                 ? "Payment details were accepted. We’re waiting for Stripe to confirm your 14-day trial."
-                : "Start with a 14-day free trial. Your card is collected securely by Stripe and your first charge is after the trial unless you cancel."}
+                : "Choose your plan now so the next step only shows integrations available to that plan. Your 14-day trial starts when you finish setup and continue to Stripe."}
             </p>
-            {checkoutState === "cancelled" && <div className="err" style={{marginBottom:16}}>Checkout was cancelled. Your setup is saved — choose a plan and continue when ready.</div>}
+            {checkoutState === "cancelled" && <div className="err" style={{marginBottom:16}}>Checkout was cancelled. Your setup is saved — review your plan, then continue to integrations when ready.</div>}
             {checkoutState !== "success" && (
               <div className="billing-plan-grid onboarding-plans">
                 {[
@@ -567,20 +539,191 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
           </>
         )}
 
+        {step === 6 && checkoutState !== "success" && (
+          <>
+            <h2>Connect services</h2>
+            <p className="step-desc">
+              Configure email delivery and any live business integrations you want to use. Everything here is optional and can be changed later.
+            </p>
+
+            <div className="integration-onboarding-card">
+              <div className="integration-onboarding-head">
+                <div>
+                  <strong>Email notifications · Resend</strong>
+                  <div className="hint">Available on every plan. Used to send support ticket notifications from your workspace.</div>
+                </div>
+                <span className="badge on">All plans</span>
+              </div>
+              <div className="field">
+                <label>Resend API key</label>
+                <input
+                  type="password"
+                  name="resend_api_key"
+                  value={state.resendApiKey}
+                  onChange={(e) => set("resendApiKey", e.target.value)}
+                  placeholder="re_…"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="field">
+                  <label>From email</label>
+                  <input
+                    type="email"
+                    name="resend_from_email"
+                    value={state.resendFromEmail}
+                    onChange={(e) => set("resendFromEmail", e.target.value)}
+                    placeholder="support@yourdomain.com"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="field">
+                  <label>From name</label>
+                  <input
+                    type="text"
+                    name="resend_from_name"
+                    value={state.resendFromName}
+                    onChange={(e) => set("resendFromName", e.target.value)}
+                    placeholder={state.name || "Customer Support"}
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+              {!resendComplete && <div className="err">Enter both a Resend API key and a valid From email, or leave both blank to configure later.</div>}
+              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                The From email must belong to a domain you have verified in Resend.
+              </p>
+            </div>
+
+            {selectedPlan === "starter" ? (
+              <>
+                <div className="integration-onboarding-card locked-integration">
+                  <div className="integration-onboarding-head">
+                    <div>
+                      <strong>WooCommerce</strong>
+                      <div className="hint">Product, order and checkout data.</div>
+                    </div>
+                    <span className="badge off">Growth+</span>
+                  </div>
+                  <p className="muted">Upgrade to Growth or Scale to connect WooCommerce.</p>
+                </div>
+                <div className="integration-onboarding-card locked-integration">
+                  <div className="integration-onboarding-head">
+                    <div>
+                      <strong>Supabase</strong>
+                      <div className="hint">Live business-data queries from your database.</div>
+                    </div>
+                    <span className="badge off">Growth+</span>
+                  </div>
+                  <p className="muted">Upgrade to Growth or Scale to connect Supabase.</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="integration-onboarding-card">
+                  <div className="integration-onboarding-head">
+                    <div>
+                      <strong>WooCommerce</strong>
+                      <div className="hint">Available on {selectedPlan === "scale" ? "Scale" : "Growth"}.</div>
+                    </div>
+                    <span className="badge on">Included</span>
+                  </div>
+                  <div className="field">
+                    <label>Store URL</label>
+                    <input
+                      type="url"
+                      name="woocommerce_store_url"
+                      value={state.wooUrl}
+                      onChange={(e) => set("wooUrl", e.target.value)}
+                      placeholder="https://example.com"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="field">
+                      <label>Consumer key</label>
+                      <input
+                        type="text"
+                        name="woocommerce_consumer_key"
+                        value={state.wooKey}
+                        onChange={(e) => set("wooKey", e.target.value)}
+                        placeholder="ck_…"
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Consumer secret</label>
+                      <input
+                        type="password"
+                        name="woocommerce_consumer_secret"
+                        value={state.wooSecret}
+                        onChange={(e) => set("wooSecret", e.target.value)}
+                        placeholder="cs_…"
+                        autoComplete="new-password"
+                      />
+                    </div>
+                  </div>
+                  {!wooComplete && <div className="err">Complete all three WooCommerce fields, or leave all three blank.</div>}
+                  <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    Create these in WooCommerce → Settings → Advanced → REST API.
+                  </p>
+                </div>
+
+                <div className="integration-onboarding-card">
+                  <div className="integration-onboarding-head">
+                    <div>
+                      <strong>Supabase</strong>
+                      <div className="hint">Available on {selectedPlan === "scale" ? "Scale" : "Growth"}.</div>
+                    </div>
+                    <span className="badge on">Included</span>
+                  </div>
+                  <div className="field">
+                    <label>Project URL</label>
+                    <input
+                      type="url"
+                      name="external_supabase_url"
+                      value={state.supaUrl}
+                      onChange={(e) => set("supaUrl", e.target.value)}
+                      placeholder="https://xyz.supabase.co"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Anon key</label>
+                    <input
+                      type="password"
+                      name="external_supabase_anon_key"
+                      value={state.supaAnonKey}
+                      onChange={(e) => set("supaAnonKey", e.target.value)}
+                      placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                      autoComplete="new-password"
+                    />
+                  </div>
+                  {!supabaseComplete && <div className="err">Enter both the Supabase Project URL and Anon key, or leave both blank.</div>}
+                  <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    Find these in Supabase Dashboard → Settings → API.
+                  </p>
+                </div>
+              </>
+            )}
+          </>
+        )}
+
         {error ? <div className="err" style={{ color: "var(--red)", marginTop: 8 }}>{error}</div> : null}
 
         <div className="wizard-nav">
-          <button className="btn secondary" disabled={step === 0 || busy} onClick={() => setStep((s) => s - 1)}>
+          <button className="btn secondary" disabled={step === 0 || busy || checkoutState === "success"} onClick={() => setStep((s) => s - 1)}>
             Back
           </button>
-          {step < 6 ? (
-            <button className="btn" disabled={!canNext} onClick={() => setStep((s) => s + 1)}>
+          {checkoutState === "success" ? (
+            <button className="btn" disabled>Activating…</button>
+          ) : step < 6 ? (
+            <button className="btn" disabled={!canNext || busy} onClick={() => setStep((s) => s + 1)}>
               Continue
             </button>
-          ) : checkoutState === "success" ? (
-            <button className="btn" disabled>Activating…</button>
           ) : (
-            <button className="btn" disabled={busy || !canNext} onClick={resumeCheckout ? resumeStripeCheckout : submit}>
+            <button className="btn" disabled={busy || !canNext} onClick={submit}>
               {busy ? "Opening Stripe…" : "Start 14-day free trial"}
             </button>
           )}

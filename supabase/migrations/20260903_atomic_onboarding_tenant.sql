@@ -144,19 +144,28 @@ begin
    * Notice that we use the variable v_new_tenant_id here rather
    * than the RETURNS TABLE variable tenant_id.
    */
-  insert into public.tenant_members (
-    tenant_id,
-    user_id,
-    role
-  )
-  values (
-    v_new_tenant_id,
-    p_user,
-    'owner'
-  )
-  on conflict (tenant_id, user_id)
-  do update
-    set role = excluded.role;
+  if not exists (
+    select 1
+    from public.tenant_members as existing_member
+    where existing_member.tenant_id = v_new_tenant_id
+      and existing_member.user_id = p_user
+  ) then
+    insert into public.tenant_members (
+      tenant_id,
+      user_id,
+      role
+    )
+    values (
+      v_new_tenant_id,
+      p_user,
+      'owner'
+    );
+  else
+    update public.tenant_members as existing_member
+    set role = 'owner'
+    where existing_member.tenant_id = v_new_tenant_id
+      and existing_member.user_id = p_user;
+  end if;
 
   /*
    * Explicitly return the values.

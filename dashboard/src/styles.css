@@ -929,3 +929,30 @@ input[type="color"] {
     grid-template-columns: 1fr !important;
   }
 }
+
+/* Onboarding integrations: simple plan-aware service cards. */
+.integration-onboarding-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  margin-top: 16px;
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+}
+.integration-onboarding-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.locked-integration {
+  opacity: .78;
+}
+@media (max-width: 700px) {
+  .integration-onboarding-card [style*="grid-template-columns: 1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+  .integration-onboarding-head {
+    align-items: center;
+  }
+}
