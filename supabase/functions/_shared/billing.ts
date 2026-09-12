@@ -87,7 +87,7 @@ function dbHeaders() {
 function dbBase() { return `${supabaseConfig().url.replace(/\/+$/g, "")}/rest/v1`; }
 
 async function tenantBillingRow(tenantId: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${dbBase()}/tenants?id=eq.${encodeURIComponent(tenantId)}&select=id,name,stripe_customer_id,stripe_subscription_id,subscription_status,plan&limit=1`, { headers: dbHeaders() });
+  const res = await fetch(`${dbBase()}/tenants?id=eq.${encodeURIComponent(tenantId)}&select=id,name,stripe_customer_id,stripe_subscription_id,subscription_status,plan,trial_used&limit=1`, { headers: dbHeaders() });
   if (!res.ok) throw new DashboardError("Could not load billing account", 502);
   const rows = await res.json() as Record<string, unknown>[];
   if (!rows[0]) throw new DashboardError("Tenant not found", 404);
@@ -107,7 +107,7 @@ function dashboardBaseUrl(): string {
   return (env("DASHBOARD_URL")?.trim() || "https://dashboard-kappa-flax-30.vercel.app").replace(/\/+$/g, "");
 }
 
-export async function createCheckoutSession(ctx: DashboardContext, requestedPlan: string): Promise<{ url: string }> {
+export async function createCheckoutSession(ctx: DashboardContext, requestedPlan: string, source: "billing" | "onboarding" = "billing"): Promise<{ url: string }> {
   const plan = billingPlan(requestedPlan);
   const row = await tenantBillingRow(ctx.tenantId);
   let customerId = String(row.stripe_customer_id ?? "").trim();
@@ -132,6 +132,7 @@ export async function createCheckoutSession(ctx: DashboardContext, requestedPlan
   }
 
   const base = dashboardBaseUrl();
+  const trialDays = row.trial_used === true ? 0 : Math.max(0, Number(env("STRIPE_TRIAL_DAYS") ?? "14") || 14);
   const automaticTax = (env("STRIPE_AUTOMATIC_TAX") ?? "").toLowerCase() === "true";
   const session = await stripeRequest("/checkout/sessions", {
     method: "POST",
@@ -149,8 +150,15 @@ export async function createCheckoutSession(ctx: DashboardContext, requestedPlan
       "metadata[plan]": plan.key,
       "subscription_data[metadata][tenant_id]": ctx.tenantId,
       "subscription_data[metadata][plan]": plan.key,
-      success_url: `${base}/?page=billing&tenant=${encodeURIComponent(ctx.tenantId)}&billing=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${base}/?page=billing&tenant=${encodeURIComponent(ctx.tenantId)}&billing=cancelled`,
+      "subscription_data[metadata][source]": source,
+      "subscription_data[trial_period_days]": trialDays > 0 ? trialDays : undefined,
+      "metadata[source]": source,
+      success_url: source === "onboarding"
+        ? `${base}/?tenant=${encodeURIComponent(ctx.tenantId)}&onboarding_checkout=success&billing=success&plan=${plan.key}&session_id={CHECKOUT_SESSION_ID}`
+        : `${base}/?page=billing&tenant=${encodeURIComponent(ctx.tenantId)}&billing=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: source === "onboarding"
+        ? `${base}/?tenant=${encodeURIComponent(ctx.tenantId)}&onboarding_checkout=cancelled&billing=cancelled&plan=${plan.key}`
+        : `${base}/?page=billing&tenant=${encodeURIComponent(ctx.tenantId)}&billing=cancelled`,
     }),
   });
   const url = String(session.url ?? "");

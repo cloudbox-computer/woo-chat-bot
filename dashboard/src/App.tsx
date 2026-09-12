@@ -139,6 +139,10 @@ export default function App() {
     return (<>{wantsLogin ? <AuthPage /> : <Landing onLogin={() => openLogin()} onChoosePlan={openLogin} />}<ToastHost /></>);
   }
   function handleOnboardingComplete(tenantId: string) {
+    const url = new URL(window.location.href);
+    url.pathname = "/";
+    url.search = new URLSearchParams({ tenant: tenantId, welcome: "1", billing: "success" }).toString();
+    window.history.replaceState({}, "", `${url.pathname}?${url.search}`);
     setSelectedTenantId(tenantId);
     selectedTenantIdRef.current = tenantId;
     saveSelectedTenantId(tenantId);

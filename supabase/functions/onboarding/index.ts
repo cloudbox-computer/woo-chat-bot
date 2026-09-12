@@ -54,6 +54,7 @@ interface OnboardingBody {
   integrations?: WizardIntegration[];
   defaultTicketPriority?: string;
   autoTicketCategories?: string[];
+  deferCompletion?: boolean;
 }
 
 const TICKET_PREFIX_RE = /^[A-Za-z0-9]{1,4}$/;
@@ -290,14 +291,17 @@ export async function handleOnboarding(req: Request): Promise<Response> {
     }
   }
 
-  // Mark the tenant complete only after the chatbot, knowledge and integration
-  // writes above succeeded.
-  const completeTenant = await fetch(`${base}/tenants?id=eq.${encodeURIComponent(tenantId)}`, {
-    method: "PATCH",
-    headers: { ...headers, Prefer: "return=minimal" },
-    body: JSON.stringify({ onboarding_complete: true }),
-  });
-  if (!completeTenant.ok) throw new DashboardError("Failed to finalize onboarding", 502);
+  // For paid SaaS onboarding we save the complete configuration first, then
+  // Stripe activates the workspace after checkout. This avoids marking a new
+  // account ready before its trial/subscription exists.
+  if (!body.deferCompletion) {
+    const completeTenant = await fetch(`${base}/tenants?id=eq.${encodeURIComponent(tenantId)}`, {
+      method: "PATCH",
+      headers: { ...headers, Prefer: "return=minimal" },
+      body: JSON.stringify({ onboarding_complete: true }),
+    });
+    if (!completeTenant.ok) throw new DashboardError("Failed to finalize onboarding", 502);
+  }
 
   const embedScript = embedScriptFor(publicId);
 
@@ -308,7 +312,7 @@ export async function handleOnboarding(req: Request): Promise<Response> {
     chatbotId,
     publicId,
     embedScript,
-    next: "install", // wizard step to land on after onboarding
+    next: body.deferCompletion ? "billing" : "install",
   });
 }
 

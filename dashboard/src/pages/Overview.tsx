@@ -1,17 +1,21 @@
 import React from "react";
-import { getOverview, getTranscript, sendAgentMessage, setConversationMode, type ConfigData, type OverviewData } from "../lib/api";
+import { getOverview, getTranscript, sendAgentMessage, setConversationMode, getBilling, getIntegrations, type BillingState, type IntegrationItem, type ConfigData, type OverviewData } from "../lib/api";
 import { Card, Spinner, ErrorBox, Badge } from "../components/ui";
 
-export default function Overview({ tenantId, config }: { tenantId: string; config: ConfigData | null }) {
+export default function Overview({ tenantId, config, onNavigate }: { tenantId: string; config: ConfigData | null; onNavigate?: (page: "chatbot"|"integrations"|"billing") => void }) {
   const [data, setData] = React.useState<OverviewData | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [transcript, setTranscript] = React.useState<{conversation:Record<string,unknown>;messages:Array<Record<string,unknown>>}|null>(null);
   const [agentText,setAgentText]=React.useState("");
+  const [billing,setBilling]=React.useState<BillingState|null>(null);
+  const [integrations,setIntegrations]=React.useState<IntegrationItem[]>([]);
 
   React.useEffect(() => {
     setData(null);
     setError(null);
     getOverview(tenantId).then(setData).catch((e) => setError(e instanceof Error ? e.message : "Failed to load"));
+    getBilling(tenantId).then((r)=>setBilling(r.billing)).catch(()=>setBilling(null));
+    getIntegrations(tenantId).then((r)=>setIntegrations(r.items)).catch(()=>setIntegrations([]));
   }, [tenantId]);
 
   if (error) return <ErrorBox message={error} />;
@@ -35,6 +39,22 @@ export default function Overview({ tenantId, config }: { tenantId: string; confi
       </div>
 
       {!data && !error && <Spinner />}
+
+      {config?.tenant && (
+        <Card>
+          <div style={{display:"flex",justifyContent:"space-between",gap:16,alignItems:"flex-start",flexWrap:"wrap"}}>
+            <div><h3 style={{margin:"0 0 6px"}}>Finish setup</h3><p className="muted" style={{margin:0}}>Your workspace is ready. Complete these steps to start serving customers.</p></div>
+            {billing && <Badge tone={billing.status === "active" || billing.status === "trialing" ? "resolved" : "in_progress"}>{billing.status === "trialing" ? "14-day trial active" : billing.status === "active" ? `${billing.plan} plan active` : "Billing needs attention"}</Badge>}
+          </div>
+          <div className="setup-grid">
+            <button className="setup-step done" type="button" onClick={()=>onNavigate?.("chatbot")}><span>✓</span><div><b>Business & assistant</b><small>Configured</small></div></button>
+            <button className={`setup-step ${integrations.some(i=>i.active&&i.configured)?"done":""}`} type="button" onClick={()=>onNavigate?.("integrations")}><span>{integrations.some(i=>i.active&&i.configured)?"✓":"2"}</span><div><b>Connect integrations</b><small>{integrations.some(i=>i.active&&i.configured)?`${integrations.filter(i=>i.active&&i.configured).length} connected`:"Optional — connect your systems"}</small></div></button>
+            <button className={`setup-step ${billing && ["active","trialing"].includes(billing.status)?"done":""}`} type="button" onClick={()=>onNavigate?.("billing")}><span>{billing && ["active","trialing"].includes(billing.status)?"✓":"3"}</span><div><b>Plan & billing</b><small>{billing?.status === "trialing"?"Free trial active":billing?.status === "active"?`${billing.plan} active`:"Complete subscription"}</small></div></button>
+            <button className="setup-step" type="button" onClick={()=>onNavigate?.("chatbot")}><span>4</span><div><b>Install website widget</b><small>Copy your unique embed snippet</small></div></button>
+          </div>
+          {billing && <div className="usage-strip"><div><small>PLAN</small><b>{billing.plan === "unsubscribed"?"—":billing.plan}</b></div><div><small>CONVERSATIONS THIS MONTH</small><b>{billing.conversationsUsed.toLocaleString()} / {billing.conversationLimit.toLocaleString()}</b></div><div><small>INTEGRATIONS</small><b>{integrations.filter(i=>i.active&&i.configured).length} connected</b></div></div>}
+        </Card>
+      )}
 
       {stats && (
         <div className="grid cols-4" style={{ marginBottom: 24 }}>

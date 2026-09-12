@@ -217,7 +217,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
       <main className="main">
         {selectedTenantId && (
           <React.Fragment key={selectedTenantId}>
-            {page === "overview" && <Overview tenantId={selectedTenantId} config={config} />}
+            {page === "overview" && <Overview tenantId={selectedTenantId} config={config} onNavigate={(next)=>navigateToPage(next)} />}
             {page === "chatbot" && <ChatbotPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} />}
             {page === "knowledge" && <KnowledgePage tenantId={selectedTenantId} />}
             {page === "tickets" && <TicketsPage tenantId={selectedTenantId} selectedTicketId={linkedTicketId} />}

@@ -79,6 +79,7 @@ export interface OnboardingInput {
   }>;
   defaultTicketPriority?: string;
   autoTicketCategories?: string[];
+  deferCompletion?: boolean;
 }
 
 export interface OnboardingResult {
@@ -347,5 +348,5 @@ export interface BillingState {
   maxAssistants: number; conversationsUsed: number;
 }
 export function getBilling(tenantId:string) { return request<{billing:BillingState;plans:BillingPlanSummary[];canManage:boolean}>(`/dashboard${tenantQuery(tenantId,"billing")}`); }
-export function createBillingCheckout(tenantId:string,plan:BillingPlanKey) { return request<{url:string}>(`/dashboard${tenantQuery(tenantId,"billing")}`,{method:"POST",body:JSON.stringify({operation:"checkout",plan})}); }
+export function createBillingCheckout(tenantId:string,plan:BillingPlanKey,source:"billing"|"onboarding"="billing") { return request<{url:string}>(`/dashboard${tenantQuery(tenantId,"billing")}`,{method:"POST",body:JSON.stringify({operation:"checkout",plan,source})}); }
 export function openBillingPortal(tenantId:string) { return request<{url:string}>(`/dashboard${tenantQuery(tenantId,"billing")}`,{method:"POST",body:JSON.stringify({operation:"portal"})}); }

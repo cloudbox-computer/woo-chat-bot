@@ -56,11 +56,18 @@ Deno.serve(async (req: Request) => {
       const tenantId = typeof metadata?.tenant_id === "string" ? metadata.tenant_id : String(object.client_reference_id ?? "");
       const subscriptionId = typeof object.subscription === "string" ? object.subscription : "";
       const customerId = typeof object.customer === "string" ? object.customer : "";
+      const source = typeof metadata?.source === "string" ? metadata.source : "";
       if (tenantId && customerId) {
         await fetch(`${base()}/tenants?id=eq.${encodeURIComponent(tenantId)}`, {
           method: "PATCH",
           headers: { ...headers(), Prefer: "return=minimal" },
-          body: JSON.stringify({ stripe_customer_id: customerId, stripe_subscription_id: subscriptionId || null, billing_enforced: true }),
+          body: JSON.stringify({
+            stripe_customer_id: customerId,
+            stripe_subscription_id: subscriptionId || null,
+            billing_enforced: true,
+            trial_used: true,
+            ...(source === "onboarding" ? { onboarding_complete: true } : {}),
+          }),
         });
       }
       if (subscriptionId) await syncSubscription(await fetchStripeSubscription(subscriptionId), tenantId || undefined);

@@ -715,3 +715,21 @@ input[type="color"] {
 
 /* Billing */
 .billing-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:18px}.billing-head h1{margin-bottom:6px}.billing-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:0;padding:0;overflow:hidden;margin:18px 0 24px}.billing-summary>div{padding:22px 24px;border-right:1px solid var(--border,#e5e7eb);display:flex;flex-direction:column;gap:7px}.billing-summary>div:last-child{border-right:0}.billing-label{font-size:10px;letter-spacing:.12em;color:#7d8984;font-weight:800}.billing-summary strong{font-size:20px}.billing-status{width:max-content;border-radius:999px;padding:5px 9px;font-size:10px;font-weight:800;background:#edf2ef;color:#55615c}.status-active,.status-trialing{background:#e2f6e9;color:#227347}.status-past_due{background:#fff1d6;color:#94620c}.status-canceled{background:#fbe6e6;color:#9a3131}.billing-meter{height:7px;background:#edf0ee;border-radius:99px;overflow:hidden;margin-top:4px}.billing-meter i{display:block;height:100%;background:#21664f;border-radius:99px}.billing-plan-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.billing-plan{position:relative;padding:25px!important}.billing-plan.featured{border:1.5px solid #21664f}.billing-badge{position:absolute;right:17px;top:17px;font-size:9px;font-weight:800;letter-spacing:.08em;background:#e9f7bd;color:#496321;padding:5px 8px;border-radius:99px}.billing-plan h2{margin:0 0 18px}.billing-price{display:flex;align-items:center;margin-bottom:18px}.billing-price b{font-size:38px;letter-spacing:-.04em}.billing-price span{font-size:11px;color:#74817c;margin-left:8px}.billing-price small{font-size:9px}.billing-plan ul{list-style:none;padding:18px 0;margin:0 0 20px;border-top:1px solid #e7eae8;min-height:145px}.billing-plan li{font-size:13px;margin:11px 0;color:#51615a}.billing-plan button{width:100%}.billing-footnote{margin-top:18px;font-size:12px}@media(max-width:900px){.billing-summary,.billing-plan-grid{grid-template-columns:1fr}.billing-summary>div{border-right:0;border-bottom:1px solid var(--border,#e5e7eb)}.billing-summary>div:last-child{border-bottom:0}.billing-head{flex-direction:column}}
+
+/* Guided SaaS onboarding + overview setup */
+.onboarding-plans { margin-top: 18px; }
+.onboarding-plans .billing-plan { text-align:left; cursor:pointer; width:100%; border:1px solid var(--border); color:inherit; background:var(--card); }
+.onboarding-plans .billing-plan.selected-plan { outline:2px solid var(--accent,#7c3aed); outline-offset:2px; }
+.plan-select-mark { margin-top:14px; font-weight:700; }
+.setup-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-top:18px; }
+.setup-step { display:flex; gap:10px; align-items:center; text-align:left; padding:14px; border:1px solid var(--border); border-radius:12px; background:var(--card); color:inherit; cursor:pointer; }
+.setup-step>span { width:28px; height:28px; border-radius:50%; display:grid; place-items:center; border:1px solid var(--border); font-weight:800; flex:none; }
+.setup-step.done>span { background:rgba(34,197,94,.12); }
+.setup-step b,.setup-step small { display:block; }
+.setup-step small { color:var(--muted); margin-top:3px; }
+.usage-strip { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:16px; padding-top:16px; border-top:1px solid var(--border); }
+.usage-strip small,.usage-strip b { display:block; }
+.usage-strip small { color:var(--muted); font-size:10px; font-weight:800; letter-spacing:.08em; }
+.usage-strip b { margin-top:4px; text-transform:capitalize; }
+@media(max-width:900px){.setup-grid{grid-template-columns:1fr 1fr}.usage-strip{grid-template-columns:1fr}}
+@media(max-width:600px){.setup-grid{grid-template-columns:1fr}}

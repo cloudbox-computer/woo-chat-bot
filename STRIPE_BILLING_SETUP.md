@@ -124,3 +124,9 @@ Use Stripe test mode first. Create test recurring prices, set the test `sk_...`,
 8. verify a new unpaid tenant's widget is blocked while an active tenant works.
 
 Only then replace the test keys/price IDs/webhook with live-mode values.
+
+## Guided signup/trial flow (latest)
+
+New workspaces now save onboarding first, then start Stripe Checkout. The default introductory trial is 14 days (`STRIPE_TRIAL_DAYS=14`). Checkout cancellation returns the customer to the saved Plan step. A successful signed webhook marks onboarding complete and the app lands on Overview with setup progress. `trial_used` prevents a workspace from repeatedly claiming introductory trials.
+
+Apply `supabase/migrations/20260912_stripe_trial_onboarding.sql` after the base Stripe billing migration and redeploy `dashboard`, `onboarding`, and `stripe-webhook`.

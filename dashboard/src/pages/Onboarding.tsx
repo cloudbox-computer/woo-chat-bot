@@ -1,5 +1,5 @@
 import React from "react";
-import { runOnboarding, analyzeWebsite, createTenant, type OnboardingInput, type OnboardingResult } from "../lib/api";
+import { runOnboarding, analyzeWebsite, createTenant, createBillingCheckout, getBilling, type OnboardingInput, type BillingPlanKey } from "../lib/api";
 import { supabase } from "../lib/supabase";
 import { toast } from "../components/ui";
 
@@ -14,7 +14,7 @@ const STEPS = [
   "Knowledge",
   "Integrations",
   "Support",
-  "Install",
+  "Plan",
 ];
 
 
@@ -86,10 +86,37 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
   const [step, setStep] = React.useState(0);
   const [state, setState] = React.useState<WizardState>(initial);
   const [busy, setBusy] = React.useState(false);
-  const [result, setResult] = React.useState<OnboardingResult | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [analyzing, setAnalyzing] = React.useState(false);
   const [analyzeError, setAnalyzeError] = React.useState<string | null>(null);
+  const query = React.useMemo(() => new URLSearchParams(window.location.search), []);
+  const initialPlan = query.get("plan");
+  const [selectedPlan, setSelectedPlan] = React.useState<BillingPlanKey>(
+    initialPlan === "starter" || initialPlan === "growth" || initialPlan === "scale" ? initialPlan : "growth",
+  );
+  const checkoutState = query.get("onboarding_checkout");
+  const resumeCheckout = !!tenantId && (checkoutState === "cancelled" || checkoutState === "success");
+
+  React.useEffect(() => {
+    if (resumeCheckout) setStep(6);
+  }, [resumeCheckout]);
+
+  React.useEffect(() => {
+    if (!tenantId || checkoutState !== "success") return;
+    let stopped = false;
+    const check = async () => {
+      try {
+        const data = await getBilling(tenantId);
+        if (!stopped && ["active", "trialing"].includes(data.billing.status)) {
+          if (onComplete) onComplete(tenantId);
+          else window.location.assign("/?welcome=1&billing=success");
+        }
+      } catch { /* webhook may still be processing */ }
+    };
+    void check();
+    const timer = window.setInterval(check, 1800);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [tenantId, checkoutState, onComplete]);
 
   const set = <K extends keyof WizardState>(key: K, value: WizardState[K]) =>
     setState((s) => ({ ...s, [key]: value }));
@@ -165,14 +192,28 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
         ticketPrefix: state.ticketPrefix || undefined,
         defaultTicketPriority: state.defaultTicketPriority,
         autoTicketCategories: state.autoTicketCategories,
+        deferCompletion: true,
       };
-      const res = await runOnboarding(input);
-      setResult(res);
-      setStep(6); // Install
+      await runOnboarding(input);
+      const checkout = await createBillingCheckout(onboardingTenantId, selectedPlan, "onboarding");
+      window.location.assign(checkout.url);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Onboarding failed");
       toast("err", err instanceof Error ? err.message : "Onboarding failed");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resumeStripeCheckout() {
+    if (!tenantId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const checkout = await createBillingCheckout(tenantId, selectedPlan, "onboarding");
+      window.location.assign(checkout.url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not open Stripe Checkout");
       setBusy(false);
     }
   }
@@ -498,39 +539,49 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
 
         {step === 6 && (
           <>
-            <h2>Install on your site</h2>
+            <h2>{checkoutState === "success" ? "Activating your workspace…" : "Choose your plan"}</h2>
             <p className="step-desc">
-              {result ? "Your assistant is live! Paste this before the closing </body> tag." : "Processing your setup…"}
+              {checkoutState === "success"
+                ? "Payment details were accepted. We’re waiting for Stripe to confirm your 14-day trial."
+                : "Start with a 14-day free trial. Your card is collected securely by Stripe and your first charge is after the trial unless you cancel."}
             </p>
-            {result && (
-              <>
-                <div className="codeblock">{result.embedScript}</div>
-                <p className="muted" style={{ marginTop: 12 }}>
-                  Public chatbot ID <strong>{result.publicId}</strong>. This is the only tenant identifier included in the installation snippet.
-                  The snippet is also shown in the dashboard under <strong>Install</strong>.
-                </p>
-                <button type="button" className="btn" style={{ marginTop: 12 }} onClick={() => {
-                  if (onComplete) onComplete(result.tenantId);
-                  else window.location.assign("/");
-                }}>Open your dashboard</button>
-              </>
+            {checkoutState === "cancelled" && <div className="err" style={{marginBottom:16}}>Checkout was cancelled. Your setup is saved — choose a plan and continue when ready.</div>}
+            {checkoutState !== "success" && (
+              <div className="billing-plan-grid onboarding-plans">
+                {[
+                  {key:"starter" as const,name:"Starter",price:29,limit:"500 conversations",assistants:"1 assistant"},
+                  {key:"growth" as const,name:"Growth",price:79,limit:"2,500 conversations",assistants:"3 assistants"},
+                  {key:"scale" as const,name:"Scale",price:199,limit:"10,000 conversations",assistants:"10 assistants"},
+                ].map((plan) => (
+                  <button type="button" key={plan.key} className={`billing-plan card ${selectedPlan===plan.key?"featured selected-plan":""}`} onClick={()=>setSelectedPlan(plan.key)}>
+                    {plan.key === "growth" && <span className="billing-badge">MOST POPULAR</span>}
+                    <h2>{plan.name}</h2>
+                    <div className="billing-price"><b>£{plan.price}</b><span>/ month<br/><small>ex VAT</small></span></div>
+                    <ul><li>✓ {plan.assistants}</li><li>✓ {plan.limit} / month</li><li>✓ 14-day free trial</li></ul>
+                    <div className="plan-select-mark">{selectedPlan===plan.key?"✓ Selected":"Select plan"}</div>
+                  </button>
+                ))}
+              </div>
             )}
+            {checkoutState === "success" && <div className="empty">Confirming subscription… this usually takes only a few seconds.</div>}
           </>
         )}
 
-        {error && step < 6 ? <div className="err" style={{ color: "var(--red)", marginTop: 8 }}>{error}</div> : null}
+        {error ? <div className="err" style={{ color: "var(--red)", marginTop: 8 }}>{error}</div> : null}
 
         <div className="wizard-nav">
           <button className="btn secondary" disabled={step === 0 || busy} onClick={() => setStep((s) => s - 1)}>
             Back
           </button>
-          {step < 5 ? (
+          {step < 6 ? (
             <button className="btn" disabled={!canNext} onClick={() => setStep((s) => s + 1)}>
               Continue
             </button>
+          ) : checkoutState === "success" ? (
+            <button className="btn" disabled>Activating…</button>
           ) : (
-            <button className="btn" disabled={busy || !canNext} onClick={submit}>
-              {busy ? "Creating…" : "Create my assistant"}
+            <button className="btn" disabled={busy || !canNext} onClick={resumeCheckout ? resumeStripeCheckout : submit}>
+              {busy ? "Opening Stripe…" : "Start 14-day free trial"}
             </button>
           )}
         </div>

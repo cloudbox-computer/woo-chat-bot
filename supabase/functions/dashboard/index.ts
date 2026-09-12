@@ -887,8 +887,9 @@ async function actionBilling(ctx: Awaited<ReturnType<typeof resolveDashboardCont
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
   const operation = String(body.operation ?? "");
   if (operation === "checkout") {
-    const result = await createCheckoutSession(ctx, String(body.plan ?? ""));
-    await audit(ctx, "billing.checkout.created", "tenant", ctx.tenantId, { plan: String(body.plan ?? "") });
+    const source = body.source === "onboarding" ? "onboarding" : "billing";
+    const result = await createCheckoutSession(ctx, String(body.plan ?? ""), source);
+    await audit(ctx, "billing.checkout.created", "tenant", ctx.tenantId, { plan: String(body.plan ?? ""), source: body.source === "onboarding" ? "onboarding" : "billing" });
     return json(result);
   }
   if (operation === "portal") {
