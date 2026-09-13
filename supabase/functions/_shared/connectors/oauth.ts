@@ -1,6 +1,7 @@
 import { env, supabaseConfig } from "../env.ts";
 import { encryptSecret, decryptSecret } from "../secrets.ts";
 import { definition, encryptCredentials } from "./registry.ts";
+import { ensureDefaultConnectorActions } from "./default-actions.ts";
 
 export interface OAuthProviderConfig {
   id:string;
@@ -92,5 +93,6 @@ export async function finishOAuth(req:Request,code:string,state:string):Promise<
   const row=await consumeState(state);const provider=String(row.provider);const c=cfg(provider);if(!c)throw new Error("OAuth provider is no longer configured");const verifier=row.verifier_encrypted?await decryptSecret(row.verifier_encrypted):"";const token=await exchangeCode(req,c,provider,code,verifier??"");const incoming=normalizedOAuthCredentials(provider,token);
   const current=await restRows("integrations",{tenant_id:`eq.${row.tenant_id}`,provider:`eq.${provider}`,select:"id,credentials",limit:"1"});const encrypted=await encryptCredentials(provider,incoming,(current[0]?.credentials??{}) as Record<string,unknown>);
   if(current[0])await restWrite("PATCH",`integrations?id=eq.${current[0].id}`,{credentials:encrypted,active:true});else await restWrite("POST","integrations",{tenant_id:row.tenant_id,provider,credentials:encrypted,active:true});
+  await ensureDefaultConnectorActions(String(row.tenant_id),provider,String(row.user_id??""));
   return{tenantId:String(row.tenant_id),provider};
 }

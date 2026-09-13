@@ -299,17 +299,18 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // Flattened transcript: stored history first, then the new message last so
   // the model never loses it after a tool round-trip.
   const transcript: TranscriptEntry[] = [];
+  // Conversation history and tenant knowledge are independent reads. Run them
+  // together so a slow history lookup cannot serially delay knowledge loading.
   agentTrace(req.requestId, "history:start", agentStartedAt, { fresh, persistConversation });
-  const stored = !persistConversation || fresh ? [] : await db.getMessages(conversationId);
-  agentTrace(req.requestId, "history:done", agentStartedAt, { messages: stored.length });
-  for (const m of stored.slice(-10)) {
-    transcript.push({ role: m.role, content: m.content });
-  }
-  transcript.push({ role: "user", content: req.message });
-
   agentTrace(req.requestId, "knowledge:start", agentStartedAt);
-  const knowledgeSeed = await seedKnowledge(db, tenant, chatbotId, req.message);
+  const [stored, knowledgeSeed] = await Promise.all([
+    !persistConversation || fresh ? Promise.resolve([]) : db.getMessages(conversationId),
+    seedKnowledge(db, tenant, chatbotId, req.message),
+  ]);
+  agentTrace(req.requestId, "history:done", agentStartedAt, { messages: stored.length });
   agentTrace(req.requestId, "knowledge:done", agentStartedAt, { hasContext: Boolean(knowledgeSeed.context), websiteSeeded: knowledgeSeed.websiteSeeded });
+  for (const m of stored.slice(-10)) transcript.push({ role: m.role, content: m.content });
+  transcript.push({ role: "user", content: req.message });
   const knowledgeContext = knowledgeSeed.context;
   const storeInfoSeeded = knowledgeSeed.websiteSeeded;
 
@@ -323,7 +324,21 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // deterministically, so if the model still refuses, nudge it once (bounded).
   let storeInfoRefusalRetried = false;
 
+  // Common scheduling intents are deterministic. If Calendly is connected,
+  // don't spend a full model round-trip merely to discover the obvious
+  // read-only action. This makes "what meetings can I book?" fast.
+  const directConnector = detectDeterministicConnectorAction(req.message, runtimeActions);
+  if (directConnector && allowed.has("run_connector_action")) {
+    const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail, currentUserMessage: req.message, auditConversationId: persistConversation ? conversationId : undefined };
+    agentTrace(req.requestId, "tool:start", agentStartedAt, { tool: directConnector.name, toolTurn: 1, direct: true });
+    const toolStartedAt = Date.now();
+    const toolResult = await executeTool(directConnector.name, directConnector.arguments, ctx);
+    agentTrace(req.requestId, "tool:done", agentStartedAt, { tool: directConnector.name, toolTurn: 1, direct: true, toolElapsedMs: Date.now() - toolStartedAt, ok: toolResult.ok });
+    if (toolResult.ok) { finalContent = toolResult.text; toolTurns = 1; deterministicRouted = true; }
+  }
+
   for (;;) {
+    if (finalContent) break;
     const last = transcript[transcript.length - 1];
     agentTrace(req.requestId, "ai:start", agentStartedAt, { toolTurn: toolTurns, tools: tools.length });
     const result = await provider.chat({
@@ -592,6 +607,17 @@ async function seedKnowledge(
  * never overrides a model decision and never weakens the topic gates (which
  * run before the loop). Returns a single forced tool call or null.
  */
+function detectDeterministicConnectorAction(message:string,actions:Array<{id:string;provider:string;name:string;method:string}>){
+  const m=message.trim().toLowerCase();
+  if(/\b(book|booking|appointment|appointments|meeting|meetings|call|calls|schedule|scheduling|availability|available time|available times)\b/.test(m)){
+    const list=actions.find(a=>a.provider==="calendly"&&a.method==="GET"&&a.name==="List Calendly event types");
+    if(list&&(/what .*\b(meetings?|appointments?|calls?)\b|what .*can i book|book me|book (a|an|the)|schedule (a|an)|available.*(meeting|appointment|call)|appointment.*available|meeting.*available|can i book|i'?d like to book|i would like to book/.test(m))){
+      return{name:"run_connector_action" as const,arguments:{actionId:list.id,input:{}}};
+    }
+  }
+  return null;
+}
+
 function detectDeterministicTool(message: string, toolNames: Set<string>) {
   const m = message.trim().toLowerCase();
   // Catalogue data is authoritative. For clear list/browse/find product intents,

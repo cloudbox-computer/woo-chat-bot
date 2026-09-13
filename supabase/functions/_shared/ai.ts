@@ -137,11 +137,13 @@ class ResilientProvider implements AiProvider {
   name: ProviderName;
   constructor(private primary: AiProvider, private secondary?: AiProvider) { this.name = primary.name; }
   async chat(opts: Parameters<AiProvider["chat"]>[0]): Promise<ChatCompletionResult> {
+    // Interactive widget requests must fail fast. Retrying the same provider
+    // after an 18s timeout doubled customer wait time and caused gateway 502s.
+    // Make one primary attempt; if a separately configured secondary provider
+    // exists, it may be used once as a fallback.
     let last: unknown;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try { return await this.primary.chat(opts); }
-      catch (err) { last = err; if (attempt === 0) await new Promise((r) => setTimeout(r, 250)); }
-    }
+    try { return await this.primary.chat(opts); }
+    catch (err) { last = err; }
     if (this.secondary) {
       try { return await this.secondary.chat(opts); } catch (err) { last = err; }
     }

@@ -384,11 +384,27 @@ export class SupabaseDb implements Db {
   }
 
   async getMessages(conversationId: string): Promise<Message[]> {
-    const rows = await this.get<Record<string, unknown>>("messages", {
-      select: "id,conversation_id,role,content,products,created_at",
-      conversation_id: `eq.${conversationId}`,
-      order: "created_at.asc",
-    });
+    // History is useful context but it must never hold a live widget request
+    // open for tens of seconds. Fetch only the latest turns and fail open to
+    // an empty history if PostgREST is temporarily slow.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4_000);
+    let rows: Record<string, unknown>[] = [];
+    try {
+      const res = await fetch(`${this.base}/messages?${new URLSearchParams({
+        select: "id,conversation_id,role,content,products,created_at",
+        conversation_id: `eq.${conversationId}`,
+        order: "created_at.desc",
+        limit: "10",
+      })}`, { headers: this.headers, signal: ctrl.signal });
+      if (!res.ok) throw new Error(`DB messages: ${res.status} ${await res.text()}`);
+      rows = await res.json() as Record<string, unknown>[];
+      rows.reverse();
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") console.warn("db:messages:timeout", { conversationId, timeoutMs: 4000 });
+      else console.warn("db:messages:error", { conversationId, error: e instanceof Error ? e.message : String(e) });
+      return [];
+    } finally { clearTimeout(timer); }
     return rows.map((r) => {
       let products = r.products;
       // Legacy rows may hold a jsonb *string* containing the JSON array.

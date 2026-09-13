@@ -94,6 +94,24 @@ function validateInput(schema:Record<string,unknown>,input:Record<string,unknown
   }
   return null;
 }
+function calendlyCustomerText(path:string,raw:string):string|null{
+  try{
+    const data=JSON.parse(raw) as any;
+    if(path==="/event_types"&&Array.isArray(data?.collection)){
+      const items=data.collection.filter((x:any)=>x?.active!==false).slice(0,12);
+      if(!items.length)return "There are no active appointment types available to book right now.";
+      return `Available appointment types:\n${items.map((x:any)=>`- ${String(x.name??"Meeting")}${x.duration?` (${x.duration} minutes)`:""}${x.scheduling_url?` — ${x.scheduling_url}`:""}`).join("\n")}`;
+    }
+    if(path==="/event_type_available_times"&&Array.isArray(data?.collection)){
+      const items=data.collection.filter((x:any)=>x?.status==="available").slice(0,10);
+      if(!items.length)return "I couldn't find any available appointment times in that period.";
+      return `Available appointment times:\n${items.map((x:any)=>`- ${String(x.start_time??"")}${x.scheduling_url?` — ${x.scheduling_url}`:""}`).join("\n")}`;
+    }
+    if(path==="/invitees"&&data?.resource){const r=data.resource;return [`Your appointment is booked${r.name?` for ${r.name}`:""}.`,r.status?`Status: ${r.status}`:"",r.reschedule_url?`Reschedule: ${r.reschedule_url}`:"",r.cancel_url?`Cancel: ${r.cancel_url}`:""].filter(Boolean).join("\n")}
+  }catch{/* fall back to generic mapping */}
+  return null;
+}
+
 function mappedResponse(raw:string,mapping:Record<string,unknown>):string{
   if(!mapping||!Object.keys(mapping).length)return raw;
   try{
@@ -186,13 +204,26 @@ export async function executeConnectorAction(opts:{tenantId:string;actionId:stri
   const validationError=validateInput(action.request_schema??{},opts.input??{});if(validationError){await log(false,undefined,"INVALID_INPUT");return{ok:false,text:validationError}}
   const intRows=await getRows("integrations",{tenant_id:`eq.${opts.tenantId}`,provider:`eq.${action.provider}`,active:"eq.true",select:"id,credentials",limit:"1"});const integration=intRows[0];if(!integration){await log(false,undefined,"INTEGRATION_INACTIVE");return{ok:false,text:`The ${action.provider} connection is not active.`}}
   const stored=(integration.credentials??{}) as Record<string,unknown>;let creds=await decryptedCredentials(action.provider,stored);const {path,rest}=fillPath(action.path_template,opts.input??{},creds);
+  // Calendly's event-types endpoint deliberately requires an explicit user or
+  // organization URI. Non-technical users should never have to discover or
+  // paste that URI into an action. Resolve it from the authenticated account.
+  if(action.provider==="calendly"&&action.method==="GET"&&path==="/event_types"&&!rest.user&&!rest.organization){
+    const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),8_000);
+    try{
+      const me=await fetch("https://api.calendly.com/users/me",{headers:{Authorization:`Bearer ${String(creds.access_token??"")}`,Accept:"application/json"},signal:ctrl.signal});
+      if(me.ok){const data=await me.json().catch(()=>({})) as {resource?:{uri?:string;current_organization?:string}};if(data.resource?.uri)rest.user=data.resource.uri;else if(data.resource?.current_organization)rest.organization=data.resource.current_organization;}
+      else console.warn("connector:calendly:identity-failed",{conversationId:opts.conversationId,status:me.status});
+    }catch(e){console.warn("connector:calendly:identity-error",{conversationId:opts.conversationId,error:e instanceof Error?e.message:String(e)});}finally{clearTimeout(timer)}
+    rest.active=true;rest.count=100;
+  }
   if(action.provider==="twilio"&&action.method==="POST"&&/\/Messages\.json$/i.test(path)&&!("From" in rest)&&!("MessagingServiceSid" in rest)){if(creds.messaging_service_sid)rest.MessagingServiceSid=String(creds.messaging_service_sid);else if(creds.from_number)rest.From=String(creds.from_number);else return{ok:false,text:"Twilio needs a configured Messaging Service SID, From number, or an explicit sender for this action."}}
   const build=async(current:Record<string,unknown>)=>{const ep=providerEndpoint(action.provider,current,path);const url=await assertPublicHttps(ep.url);if(action.method==="GET"||action.method==="DELETE"){for(const[k,v]of Object.entries(rest)){if(v!=null)url.searchParams.set(k,scalar(v))}}if(url.toString().length>8000)throw new Error("Connector request URL is too long");return{url,init:requestInitFor(action,ep,rest)}};
   const perform=async(current:Record<string,unknown>)=>{const {url,init}=await build(current);const ctrl=new AbortController();const timeoutMs=12_000;const timer=setTimeout(()=>ctrl.abort(),timeoutMs);const callStarted=Date.now();console.log("connector:request:start",{conversationId:opts.conversationId,actionId:action.id,provider:action.provider,method:action.method,endpoint:`${url.origin}${url.pathname}`,timeoutMs});try{const response=await fetch(url,{...init,signal:ctrl.signal});console.log("connector:request:done",{conversationId:opts.conversationId,actionId:action.id,provider:action.provider,status:response.status,elapsedMs:Date.now()-callStarted});return response}catch(e){const timedOut=e instanceof DOMException&&e.name==="AbortError";console.error(timedOut?"connector:request:timeout":"connector:request:error",{conversationId:opts.conversationId,actionId:action.id,provider:action.provider,elapsedMs:Date.now()-callStarted,error:timedOut?`Timed out after ${timeoutMs}ms`:e instanceof Error?e.message:String(e)});throw e}finally{clearTimeout(timer)}};
   try{
     let r=await perform(creds);
     if(r.status===401||r.status===403){const refreshed=await refreshOAuthIfAvailable(action.provider,creds);if(JSON.stringify(refreshed)!==JSON.stringify(creds)){creds=refreshed;await persistRefreshedCredentials(String(integration.id),action.provider,creds,stored);r=await perform(creds)}}
-    const raw=await readResponseLimited(r);if(!r.ok){await log(false,r.status,"UPSTREAM_ERROR");return{ok:false,text:`${action.name} failed (${r.status}). ${safeResultText(raw).slice(0,4000)}`}}const mapped=mappedResponse(raw,action.response_mapping??{});await log(true,r.status);return{ok:true,text:`${action.name} succeeded.\n${safeResultText(mapped)||"No response body."}`}
+    const raw=await readResponseLimited(r);if(!r.ok){await log(false,r.status,"UPSTREAM_ERROR");return{ok:false,text:`${action.name} failed (${r.status}). ${safeResultText(raw).slice(0,4000)}`}}const customerText=action.provider==="calendly"?calendlyCustomerText(path,raw):null;const mapped=mappedResponse(raw,action.response_mapping??{});await log(true,r.status);return{ok:true,text:customerText??`${action.name} succeeded.\n${safeResultText(mapped)||"No response body."}`}
+
   }catch(e){const code=e instanceof DOMException&&e.name==="AbortError"?"TIMEOUT":"REQUEST_ERROR";await log(false,undefined,code);return{ok:false,text:`${action.name} failed: ${e instanceof Error?e.message:"request error"}`}}
 }
 

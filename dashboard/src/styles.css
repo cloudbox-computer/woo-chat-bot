@@ -2069,3 +2069,6 @@ tbody tr:hover { background:rgba(255,255,255,.018); }
   .transcript-reply { padding-left:14px;padding-right:14px; }
   .modal-head,.transcript-meta { padding-left:14px;padding-right:14px; }
 }
+
+/* Built-in integration actions: keep developer controls out of the main flow. */
+.advanced-actions{margin-top:14px;border-top:1px solid var(--border);padding-top:12px}.advanced-actions summary{cursor:pointer;font-weight:650;color:var(--muted);list-style:none}.advanced-actions summary::-webkit-details-marker{display:none}.advanced-actions summary::before{content:"›";display:inline-block;margin-right:8px;transition:transform .18s ease}.advanced-actions[open] summary::before{transform:rotate(90deg)}.advanced-actions p{margin:8px 0 10px}
