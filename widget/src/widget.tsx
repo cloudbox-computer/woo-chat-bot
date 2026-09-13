@@ -161,6 +161,15 @@ function formatAppointmentTime(value: string): string {
   if (Number.isNaN(d.getTime())) return value;
   return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(d);
 }
+function appointmentDateParts(value: string): { weekday: string; day: string; month: string } {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return { weekday: "", day: value, month: "" };
+  return {
+    weekday: new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(d),
+    day: new Intl.DateTimeFormat(undefined, { day: "numeric" }).format(d),
+    month: new Intl.DateTimeFormat(undefined, { month: "short" }).format(d),
+  };
+}
 function localDayKey(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
@@ -175,11 +184,11 @@ function InteractionCard({ interaction, brand, brandTextColor, defaultEmail, dis
   disabled?: boolean;
   onAction: (message: string, action: WidgetAction) => void;
 }) {
-  const base: React.CSSProperties = { marginTop: 8, border: "1px solid rgba(15,23,42,.10)", borderRadius: 16, background: "#fff", boxShadow: "0 8px 24px rgba(15,23,42,.06)", overflow: "hidden" };
-  const head: React.CSSProperties = { padding: "13px 14px 10px", borderBottom: "1px solid rgba(15,23,42,.07)" };
-  const btn: React.CSSProperties = { border: "1px solid rgba(15,23,42,.10)", borderRadius: 11, background: "#fff", color: COLORS.fg, padding: "9px 10px", fontSize: 12, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer" };
-  const primary: React.CSSProperties = { ...btn, background: brand, color: brandTextColor, borderColor: brand, boxShadow: `0 5px 12px ${hexToRgba(brand,.18)}` };
-  const inputStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", border: "1px solid rgba(15,23,42,.13)", borderRadius: 10, padding: "10px 11px", fontSize: 13, outline: "none", color: COLORS.fg, background: "#fff" };
+  const base: React.CSSProperties = { marginTop: 10, border: "1px solid rgba(15,23,42,.09)", borderRadius: 20, background: "#fff", boxShadow: "0 14px 36px rgba(15,23,42,.09)", overflow: "hidden" };
+  const head: React.CSSProperties = { padding: "15px 16px 13px", borderBottom: "1px solid rgba(15,23,42,.07)", background: `linear-gradient(180deg, ${hexToRgba(brand,.055)} 0%, rgba(255,255,255,1) 100%)` };
+  const btn: React.CSSProperties = { border: "1px solid rgba(15,23,42,.11)", borderRadius: 12, background: "#fff", color: COLORS.fg, padding: "10px 11px", fontSize: 12, fontWeight: 750, lineHeight: 1.2, cursor: disabled ? "not-allowed" : "pointer", transition: "transform .15s ease, border-color .15s ease, background .15s ease" };
+  const primary: React.CSSProperties = { ...btn, background: brand, color: brandTextColor, borderColor: brand, minHeight: 44, boxShadow: `0 8px 18px ${hexToRgba(brand,.22)}` };
+  const inputStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", border: "1px solid rgba(15,23,42,.13)", borderRadius: 12, padding: "11px 12px", fontSize: 13, outline: "none", color: COLORS.fg, background: "#fff", boxShadow: "0 1px 2px rgba(15,23,42,.03)" };
 
   if (interaction.type === "appointment_type_picker") {
     return <div style={base}>
@@ -197,10 +206,30 @@ function InteractionCard({ interaction, brand, brandTextColor, defaultEmail, dis
     const [email,setEmail]=useState(defaultEmail??"");
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London";
     return <div style={base}>
-      <div style={head}><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:30,height:30,borderRadius:10,background:hexToRgba(brand,.1),color:brand,display:"grid",placeItems:"center"}}>◷</div><div><div style={{fontWeight:800,fontSize:14}}>{interaction.title}</div><div style={{fontSize:12,color:COLORS.muted,marginTop:2}}>{interaction.eventType.name}{interaction.eventType.duration?` · ${interaction.eventType.duration} min`:""}</div></div></div></div>
-      <div style={{padding:"11px 12px 4px",display:"flex",gap:7,overflowX:"auto"}}>{days.map((d)=>{const active=d===day; const first=groups[d][0]?.startTime; return <button key={d} disabled={disabled} style={{...btn,minWidth:82,background:active?hexToRgba(brand,.10):"#fff",borderColor:active?hexToRgba(brand,.45):"rgba(15,23,42,.10)",color:active?brand:COLORS.fg}} onClick={()=>{setDay(d);setSlot("")}}>{formatAppointmentDate(first)}</button>})}</div>
-      <div style={{padding:12,display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:7}}>{(groups[day]??[]).map((x)=>{const active=x.startTime===slot; return <button key={x.startTime} disabled={disabled} style={{...btn,background:active?brand:"#fff",color:active?brandTextColor:COLORS.fg,borderColor:active?brand:"rgba(15,23,42,.10)"}} onClick={()=>setSlot(x.startTime)}>{formatAppointmentTime(x.startTime)}</button>})}</div>
-      {slot?<div style={{padding:"0 12px 12px",display:"grid",gap:8}}><div style={{height:1,background:"rgba(15,23,42,.07)",margin:"2px 0 3px"}}/><div style={{fontWeight:800,fontSize:13}}>Your details</div><input style={inputStyle} placeholder="Name" value={name} onChange={(e)=>setName(e.target.value)}/><input style={inputStyle} type="email" placeholder="Email" value={email} onChange={(e)=>setEmail(e.target.value)}/><button disabled={disabled||!name.trim()||!email.trim()} style={{...primary,opacity:(!name.trim()||!email.trim()) ? .45 : 1}} onClick={()=>onAction(`Confirm ${interaction.eventType.name} for ${formatAppointmentDate(slot)} at ${formatAppointmentTime(slot)}`,{type:"calendly_book",payload:{eventTypeUri:interaction.eventType.uri,eventTypeName:interaction.eventType.name,startTime:slot,name:name.trim(),email:email.trim(),timezone:zone}})}>Confirm booking</button><div style={{fontSize:10,color:COLORS.muted,textAlign:"center"}}>Your appointment is only booked after you press Confirm booking.</div></div>:null}
+      <div style={head}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
+            <div style={{width:36,height:36,borderRadius:12,background:hexToRgba(brand,.11),color:brand,display:"grid",placeItems:"center",fontSize:17,flex:"0 0 auto"}}>◷</div>
+            <div style={{minWidth:0}}><div style={{fontWeight:850,fontSize:14.5}}>{interaction.title}</div><div style={{fontSize:12,color:COLORS.muted,marginTop:3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{interaction.eventType.name}{interaction.eventType.duration?` · ${interaction.eventType.duration} min`:""}</div></div>
+          </div>
+          <div style={{fontSize:10,fontWeight:800,color:brand,background:hexToRgba(brand,.09),border:`1px solid ${hexToRgba(brand,.16)}`,borderRadius:999,padding:"5px 8px",whiteSpace:"nowrap"}}>● Live</div>
+        </div>
+      </div>
+      <div style={{padding:"13px 14px 5px"}}><div style={{fontSize:11,fontWeight:850,color:COLORS.muted,textTransform:"uppercase",letterSpacing:".055em"}}>1 · Choose a date</div></div>
+      <div style={{padding:"4px 14px 8px",display:"flex",gap:8,overflowX:"auto",scrollSnapType:"x proximity"}}>{days.map((d)=>{const active=d===day; const first=groups[d][0]?.startTime; const parts=appointmentDateParts(first); return <button key={d} disabled={disabled} aria-pressed={active} style={{...btn,minWidth:74,padding:"9px 8px",display:"grid",gap:2,placeItems:"center",scrollSnapAlign:"start",background:active?hexToRgba(brand,.11):"#fff",borderColor:active?brand:"rgba(15,23,42,.10)",color:active?brand:COLORS.fg,boxShadow:active?`0 5px 14px ${hexToRgba(brand,.10)}`:"none"}} onClick={()=>{setDay(d);setSlot("")}}><span style={{fontSize:10,fontWeight:800,textTransform:"uppercase",letterSpacing:".04em",color:active?brand:COLORS.muted}}>{parts.weekday}</span><span style={{fontSize:17,fontWeight:900,lineHeight:1.05}}>{parts.day}</span><span style={{fontSize:10.5,fontWeight:700,color:active?brand:COLORS.muted}}>{parts.month}</span></button>})}</div>
+      <div style={{padding:"10px 14px 5px"}}><div style={{fontSize:11,fontWeight:850,color:COLORS.muted,textTransform:"uppercase",letterSpacing:".055em"}}>2 · Choose a time</div></div>
+      <div style={{padding:"5px 14px 14px",display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8}}>{(groups[day]??[]).map((x)=>{const active=x.startTime===slot; return <button key={x.startTime} disabled={disabled} aria-pressed={active} style={{...btn,minHeight:42,background:active?brand:"#fff",color:active?brandTextColor:COLORS.fg,borderColor:active?brand:"rgba(15,23,42,.10)",boxShadow:active?`0 6px 14px ${hexToRgba(brand,.18)}`:"none"}} onClick={()=>setSlot(x.startTime)}>{formatAppointmentTime(x.startTime)}</button>})}</div>
+      {slot?<div style={{padding:"0 14px 15px",display:"grid",gap:10}}>
+        <div style={{height:1,background:"rgba(15,23,42,.07)",margin:"0 0 2px"}}/>
+        <div style={{padding:"10px 11px",borderRadius:12,background:hexToRgba(brand,.065),border:`1px solid ${hexToRgba(brand,.13)}`,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+          <div><div style={{fontSize:10,fontWeight:800,color:COLORS.muted,textTransform:"uppercase",letterSpacing:".045em"}}>Selected appointment</div><div style={{fontSize:12.5,fontWeight:800,marginTop:3}}>{formatAppointmentDate(slot)} · {formatAppointmentTime(slot)}</div></div><div style={{fontSize:11,fontWeight:750,color:brand}}>{interaction.eventType.duration?`${interaction.eventType.duration} min`:"Selected"}</div>
+        </div>
+        <div style={{fontWeight:850,fontSize:13}}>3 · Your details</div>
+        <label style={{display:"grid",gap:5,fontSize:11,fontWeight:750,color:COLORS.muted}}>Name<input style={inputStyle} autoComplete="name" placeholder="Your name" value={name} onChange={(e)=>setName(e.target.value)}/></label>
+        <label style={{display:"grid",gap:5,fontSize:11,fontWeight:750,color:COLORS.muted}}>Email<input style={inputStyle} type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e)=>setEmail(e.target.value)}/></label>
+        <button disabled={disabled||!name.trim()||!email.trim()} style={{...primary,width:"100%",opacity:(!name.trim()||!email.trim()) ? .45 : 1}} onClick={()=>onAction(`Book ${interaction.eventType.name} · ${formatAppointmentDate(slot)} at ${formatAppointmentTime(slot)}`,{type:"calendly_book",payload:{eventTypeUri:interaction.eventType.uri,eventTypeName:interaction.eventType.name,startTime:slot,name:name.trim(),email:email.trim(),timezone:zone}})}>Confirm booking</button>
+        <div style={{fontSize:10.5,color:COLORS.muted,textAlign:"center",lineHeight:1.45}}>Nothing is booked until you press Confirm booking.</div>
+      </div>:null}
     </div>;
   }
 

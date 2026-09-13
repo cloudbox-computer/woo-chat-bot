@@ -167,21 +167,10 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     return { reply: refusalReply(policy), products: [], conversationId: priorConversationId };
   }
 
-  // Gate 3 — tenant-configured scope. Fast lexical matching runs first; only
-  // ambiguous messages use semantic classification.
-  agentTrace(req.requestId, "topic-gate:start", agentStartedAt);
-  const topic = await checkTopicGate(
-    req.message,
-    policy,
-    policy.useModelClassifier
-      ? (message) => classifyTenantScope(provider, cfg, tenant, policy, message)
-      : undefined,
-  );
-  agentTrace(req.requestId, "topic-gate:done", agentStartedAt, { allowed: topic.allowed });
-  if (!topic.allowed) {
-    return { reply: refusalReply(policy), products: [], conversationId: priorConversationId };
-  }
-
+  // Resolve integration/action capabilities before the topic gate. This lets us
+  // safely recognise server-issued widget interactions and deterministic native
+  // integration intents (for example Calendly booking) without asking the scope
+  // classifier to reinterpret an action the assistant itself already offered.
   const permissionAllowed = allowedToolNames(chatbot.permissions ?? DEFAULT_CHATBOT_PERMISSIONS);
   const integrationRouter = createIntegrationRouter(tenant);
   // A model tool is visible only when BOTH the chatbot permission policy and
@@ -207,6 +196,34 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   const tools = [...TOOL_SPECS.filter((t) => allowed.has(t.function.name)), ...(runtimeActionTool ? [runtimeActionTool] : [])];
   if (tools.length === 0) {
     throw new AgentError("This chatbot has no tools enabled", 500);
+  }
+
+  // A structured widget action is trusted only when it maps back to an active,
+  // tenant-owned runtime action. This prevents a forged browser payload from
+  // bypassing the scope gate while allowing real picker/form/confirmation
+  // submissions to complete deterministically.
+  const trustedWidgetAction = widgetActionMatchesRuntime(req.widgetAction, runtimeActions);
+  const deterministicConnector = detectDeterministicConnectorAction(req.message, runtimeActions);
+
+  // Gate 3 — tenant-configured scope. Fast lexical matching runs first; only
+  // ambiguous messages use semantic classification. Server-issued widget
+  // actions and unambiguous native scheduling intents bypass semantic scope
+  // classification because they are already constrained to approved actions.
+  if (trustedWidgetAction || deterministicConnector) {
+    agentTrace(req.requestId, "topic-gate:bypass", agentStartedAt, { reason: trustedWidgetAction ? "trusted-widget-action" : "approved-integration-intent" });
+  } else {
+    agentTrace(req.requestId, "topic-gate:start", agentStartedAt);
+    const topic = await checkTopicGate(
+      req.message,
+      policy,
+      policy.useModelClassifier
+        ? (message) => classifyTenantScope(provider, cfg, tenant, policy, message)
+        : undefined,
+    );
+    agentTrace(req.requestId, "topic-gate:done", agentStartedAt, { allowed: topic.allowed });
+    if (!topic.allowed) {
+      return { reply: refusalReply(policy), products: [], conversationId: priorConversationId };
+    }
   }
 
   // Conversation (existing or new). In Zero Data Retention / no-storage mode
@@ -376,7 +393,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // Common scheduling intents are deterministic. If Calendly is connected,
   // don't spend a full model round-trip merely to discover the obvious
   // read-only action. This makes "what meetings can I book?" fast.
-  const directConnector = detectDeterministicConnectorAction(req.message, runtimeActions);
+  const directConnector = deterministicConnector;
   if (directConnector && allowed.has("run_connector_action")) {
     const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail, currentUserMessage: req.message, auditConversationId: persistConversation ? conversationId : undefined };
     agentTrace(req.requestId, "tool:start", agentStartedAt, { tool: directConnector.name, toolTurn: 1, direct: true });
@@ -665,6 +682,25 @@ async function seedKnowledge(
  * never overrides a model decision and never weakens the topic gates (which
  * run before the loop). Returns a single forced tool call or null.
  */
+
+function widgetActionMatchesRuntime(
+  action: ChatRequest["widgetAction"] | undefined,
+  actions: Array<{ id: string; provider: string; name: string; method: string }>,
+): boolean {
+  if (!action || !action.payload || typeof action.payload !== "object") return false;
+  if (action.type === "calendly_event_type_selected") {
+    return actions.some((a) => a.provider === "calendly" && a.name === "Check Calendly availability" && a.method === "GET");
+  }
+  if (action.type === "calendly_book") {
+    return actions.some((a) => a.provider === "calendly" && a.name === "Book Calendly appointment" && a.method === "POST");
+  }
+  if (action.type === "connector_action_submit" || action.type === "connector_action_confirm") {
+    const actionId = typeof action.payload.actionId === "string" ? action.payload.actionId : "";
+    return Boolean(actionId) && actions.some((a) => a.id === actionId);
+  }
+  return false;
+}
+
 function detectDeterministicConnectorAction(message:string,actions:Array<{id:string;provider:string;name:string;method:string}>){
   const m=message.trim().toLowerCase();
   if(/\b(book|booking|appointment|appointments|meeting|meetings|call|calls|schedule|scheduling|availability|available time|available times)\b/.test(m)){
