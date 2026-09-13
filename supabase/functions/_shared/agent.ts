@@ -20,6 +20,10 @@ import { entitlementsForTenant } from "./entitlements.ts";
 
 export const MAX_TOOL_TURNS = 6;
 
+function agentTrace(requestId: string | undefined, stage: string, startedAt: number, extra: Record<string, unknown> = {}) {
+  console.log(`agent:${stage}`, { requestId, elapsedMs: Date.now() - startedAt, ...extra });
+}
+
 // convo5 — GDPR / account-gated flows.
 //
 // Deterministic intent classifiers that run AFTER the topic gate but BEFORE
@@ -91,6 +95,7 @@ async function classifyTenantScope(
     history: [],
     userMessage: message,
     tools: [],
+    traceId: undefined,
   });
 
   return /^ALLOW\b/i.test((result.content ?? "").trim());
@@ -112,11 +117,17 @@ async function classifyTenantScope(
  * gets the tenant's fixed refusal message with zero model spend.
  */
 export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
+  const agentStartedAt = Date.now();
+  agentTrace(req.requestId, "start", agentStartedAt, { chatbotId: req.chatbotId, hasConversation: Boolean(req.conversationId) });
   const db = getDb();
 
+  agentTrace(req.requestId, "resolve-chatbot:start", agentStartedAt);
   const chatbot = await db.resolveChatbot(req.chatbotId);
+  agentTrace(req.requestId, "resolve-chatbot:done", agentStartedAt, { found: Boolean(chatbot) });
   if (!chatbot) throw new AgentError(`Unknown or inactive chatbot: ${req.chatbotId}`, 404);
+  agentTrace(req.requestId, "tenant:start", agentStartedAt);
   const baseTenant = await db.getTenantByChatbot(chatbot.id);
+  agentTrace(req.requestId, "tenant:done", agentStartedAt, { found: Boolean(baseTenant) });
   if (!baseTenant) throw new AgentError(`No tenant for chatbot: ${req.chatbotId}`, 404);
   const chatbotId = chatbot.id;
 
@@ -158,6 +169,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
 
   // Gate 3 — tenant-configured scope. Fast lexical matching runs first; only
   // ambiguous messages use semantic classification.
+  agentTrace(req.requestId, "topic-gate:start", agentStartedAt);
   const topic = await checkTopicGate(
     req.message,
     policy,
@@ -165,6 +177,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
       ? (message) => classifyTenantScope(provider, cfg, tenant, policy, message)
       : undefined,
   );
+  agentTrace(req.requestId, "topic-gate:done", agentStartedAt, { allowed: topic.allowed });
   if (!topic.allowed) {
     return { reply: refusalReply(policy), products: [], conversationId: priorConversationId };
   }
@@ -186,7 +199,9 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // HIPAA mode disables arbitrary external actions unless a future connector is
   // explicitly BAA-vetted. This prevents accidental PHI disclosure.
   const liveIntegrationAccess = entitlementsForTenant(tenant).liveIntegrations;
+  agentTrace(req.requestId, "actions:start", agentStartedAt, { enabled: liveIntegrationAccess && !tenant.hipaaMode && canReadActions });
   const runtimeActions = liveIntegrationAccess && !tenant.hipaaMode && canReadActions ? await listRuntimeActions(tenant.id, canWriteActions) : [];
+  agentTrace(req.requestId, "actions:done", agentStartedAt, { count: runtimeActions.length });
   const runtimeActionTool = connectorActionTool(runtimeActions);
   if (runtimeActionTool) allowed.add("run_connector_action");
   const tools = [...TOOL_SPECS.filter((t) => allowed.has(t.function.name)), ...(runtimeActionTool ? [runtimeActionTool] : [])];
@@ -201,7 +216,9 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   let fresh = false;
   let existing: Conversation | null = null;
   if (conversationId && persistConversation) {
+    agentTrace(req.requestId, "conversation-load:start", agentStartedAt);
     existing = await db.getConversation(conversationId);
+    agentTrace(req.requestId, "conversation-load:done", agentStartedAt, { found: Boolean(existing) });
     if (existing && existing.chatbotId !== chatbotId) {
       throw new AgentError("Conversation does not belong to this chatbot", 400);
     }
@@ -211,6 +228,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     conversationId = crypto.randomUUID();
     fresh = true;
     if (persistConversation) {
+      agentTrace(req.requestId, "conversation-create:start", agentStartedAt);
       await db.createConversation({
         id: conversationId,
         chatbotId,
@@ -220,6 +238,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
+      agentTrace(req.requestId, "conversation-create:done", agentStartedAt);
     }
   }
 
@@ -280,13 +299,17 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // Flattened transcript: stored history first, then the new message last so
   // the model never loses it after a tool round-trip.
   const transcript: TranscriptEntry[] = [];
+  agentTrace(req.requestId, "history:start", agentStartedAt, { fresh, persistConversation });
   const stored = !persistConversation || fresh ? [] : await db.getMessages(conversationId);
+  agentTrace(req.requestId, "history:done", agentStartedAt, { messages: stored.length });
   for (const m of stored.slice(-10)) {
     transcript.push({ role: m.role, content: m.content });
   }
   transcript.push({ role: "user", content: req.message });
 
+  agentTrace(req.requestId, "knowledge:start", agentStartedAt);
   const knowledgeSeed = await seedKnowledge(db, tenant, chatbotId, req.message);
+  agentTrace(req.requestId, "knowledge:done", agentStartedAt, { hasContext: Boolean(knowledgeSeed.context), websiteSeeded: knowledgeSeed.websiteSeeded });
   const knowledgeContext = knowledgeSeed.context;
   const storeInfoSeeded = knowledgeSeed.websiteSeeded;
 
@@ -302,6 +325,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
 
   for (;;) {
     const last = transcript[transcript.length - 1];
+    agentTrace(req.requestId, "ai:start", agentStartedAt, { toolTurn: toolTurns, tools: tools.length });
     const result = await provider.chat({
       model: cfg.provider === "gemini" ? cfg.geminiModel : cfg.openaiModel,
       system,
@@ -309,7 +333,9 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
       userMessage: last.content,
       tools: tools as unknown as ToolSpec[],
       knowledgeContext: toolTurns === 0 ? knowledgeContext : undefined,
+      traceId: req.requestId,
     });
+    agentTrace(req.requestId, "ai:done", agentStartedAt, { toolTurn: toolTurns, toolCalls: result.toolCalls.length, hasContent: Boolean(result.content) });
 
     // The model emitted a real tool call — execute it and loop for the reply.
     if (result.toolCalls.length > 0) {
@@ -322,7 +348,10 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
 
       const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail, currentUserMessage: req.message, auditConversationId: persistConversation ? conversationId : undefined };
       for (const call of result.toolCalls) {
+        const toolStartedAt = Date.now();
+        agentTrace(req.requestId, "tool:start", agentStartedAt, { tool: call.name, toolTurn: toolTurns });
         const toolResult = await executeTool(call.name, call.arguments, ctx);
+        agentTrace(req.requestId, "tool:done", agentStartedAt, { tool: call.name, toolTurn: toolTurns, toolElapsedMs: Date.now() - toolStartedAt });
         transcript.push({
           role: "assistant",
           content: `tool:${call.name}:${JSON.stringify(call.arguments ?? {})}`,

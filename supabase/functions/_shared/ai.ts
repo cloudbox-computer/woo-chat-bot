@@ -29,6 +29,8 @@ export interface AiProvider {
     userMessage: string;
     tools: ToolSpec[];
     knowledgeContext?: string;
+    /** Server-side correlation id for latency/error tracing. */
+    traceId?: string;
   }): Promise<ChatCompletionResult>;
 }
 
@@ -55,6 +57,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
     userMessage: string;
     tools: ToolSpec[];
     knowledgeContext?: string;
+    traceId?: string;
   }): Promise<ChatCompletionResult> {
     const messages: Array<Record<string, unknown>> = [{ role: "system", content: opts.system }];
     if (opts.knowledgeContext) {
@@ -76,14 +79,35 @@ export class OpenAiCompatibleProvider implements AiProvider {
       body.tool_choice = "auto";
     }
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+    const startedAt = Date.now();
+    const ctrl = new AbortController();
+    const timeoutMs = 18_000;
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    console.log("ai:request:start", { traceId: opts.traceId, provider: this.name, model: opts.model });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+    } catch (err) {
+      const elapsedMs = Date.now() - startedAt;
+      if (err instanceof DOMException && err.name === "AbortError") {
+        console.error("ai:request:timeout", { traceId: opts.traceId, provider: this.name, model: opts.model, elapsedMs, timeoutMs });
+        throw new Error(`AI ${this.name} request timed out after ${timeoutMs}ms`);
+      }
+      console.error("ai:request:error", { traceId: opts.traceId, provider: this.name, model: opts.model, elapsedMs, error: err instanceof Error ? err.message : String(err) });
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+    const elapsedMs = Date.now() - startedAt;
+    console.log("ai:request:done", { traceId: opts.traceId, provider: this.name, model: opts.model, status: res.status, elapsedMs });
     if (!res.ok) {
       throw new Error(`AI ${this.name}: ${res.status} ${(await res.text()).slice(0, 300)}`);
     }

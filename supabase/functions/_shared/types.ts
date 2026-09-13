@@ -342,6 +342,8 @@ export interface ToolCall {
 }
 
 export interface ChatRequest {
+  /** Correlation id used only for server-side tracing; never persisted as customer content. */
+  requestId?: string;
   chatbotId: string;
   conversationId?: string;
   conversationToken?: string;
