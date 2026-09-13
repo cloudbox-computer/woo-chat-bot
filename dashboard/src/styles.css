@@ -1478,3 +1478,5 @@ canvas {
 .incident-row p { margin:5px 0 0; }
 .incident-status { width:150px; flex:0 0 150px; }
 @media (max-width:720px){ .incident-row{align-items:stretch;flex-direction:column}.incident-status{width:100%;flex:auto} }
+/* Phase 2 integration presets */
+.preset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px}.preset-button{display:flex;flex-direction:column;gap:4px;text-align:left;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:inherit;cursor:pointer}.preset-button:hover:not(:disabled){border-color:var(--primary);transform:translateY(-1px)}.preset-button span,.preset-button em{font-size:12px;color:var(--muted)}.preset-button em{font-style:normal}.preset-button:disabled{opacity:.55;cursor:not-allowed}

@@ -15,5 +15,7 @@ Deno.serve(async(req:Request)=>{
   await fetch(`${root}/rest/v1/idempotency_keys?expires_at=lt.${encodeURIComponent(new Date().toISOString())}`,{method:"DELETE",headers:{...h,Prefer:"return=minimal"}});
   const due=await fetch(`${root}/rest/v1/rpc/enqueue_due_source_syncs`,{method:"POST",headers:h,body:JSON.stringify({p_limit:100})});
   const queued=due.ok?Number(await due.json()):0;
-  return json({ok:true,deletedConversations:deleted,queuedSourceSyncs:queued});
+  const oauthCleanup=await fetch(`${root}/rest/v1/rpc/cleanup_connector_oauth_states`,{method:"POST",headers:h,body:"{}"});
+  const deletedOauthStates=oauthCleanup.ok?Number(await oauthCleanup.json()):0;
+  return json({ok:true,deletedConversations:deleted,queuedSourceSyncs:queued,deletedOauthStates});
 });

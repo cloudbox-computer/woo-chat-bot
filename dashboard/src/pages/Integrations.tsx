@@ -1,383 +1,42 @@
 import React from "react";
-import { getIntegrations, testIntegration, updateIntegration, type IntegrationItem, type PlanEntitlements } from "../lib/api";
-import { Card, Field, Spinner, ErrorBox, Badge, toast } from "../components/ui";
+import {
+  deleteConnectorAction, listConnections, listConnectorActions, removeConnection, saveConnection,
+  saveConnectorAction, startConnectorOAuth, testConnection, type ConnectorActionItem, type ConnectorItem, type PlanEntitlements,
+} from "../lib/api";
+import { Badge, Card, Field, Spinner, ErrorBox, toast } from "../components/ui";
 
-export default function IntegrationsPage({ tenantId, entitlements, onUpgrade }: { tenantId: string; entitlements: PlanEntitlements | null; onUpgrade?: () => void }) {
-  const [items, setItems] = React.useState<IntegrationItem[] | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [showWoo, setShowWoo] = React.useState(false);
-  const [showSupa, setShowSupa] = React.useState(false);
-  const [showResend, setShowResend] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
+const CATEGORY_LABELS:Record<string,string>={commerce:"Commerce",payments:"Payments",crm:"CRM",support:"Support",messaging:"Messaging",scheduling:"Scheduling",knowledge:"Knowledge",cms:"CMS",automation:"Automation",developer:"Developer",email:"Email",database:"Database"};
 
-  const [url, setUrl] = React.useState("");
-  const [key, setKey] = React.useState("");
-  const [secret, setSecret] = React.useState("");
-  const [webhookSecret,setWebhookSecret]=React.useState("");
-  const [supaUrl, setSupaUrl] = React.useState("");
-  const [supaKey, setSupaKey] = React.useState("");
-  const [supaCapabilityConfig, setSupaCapabilityConfig] = React.useState("");
-  const [supaQueryPolicy, setSupaQueryPolicy] = React.useState("");
-  const [resendKey, setResendKey] = React.useState("");
-  const [resendFromEmail, setResendFromEmail] = React.useState("");
-  const [resendFromName, setResendFromName] = React.useState("");
-  const liveIntegrationsLocked = entitlements ? !entitlements.liveIntegrations : false;
-
-  async function load() {
-    try {
-      const res = await getIntegrations(tenantId);
-      setItems(res.items);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load integrations");
-    }
-  }
-
-  React.useEffect(() => {
-    setItems(null);
-    setError(null);
-    setShowWoo(false);
-    setShowSupa(false);
-    setShowResend(false);
-    setUrl("");
-    setKey("");
-    setSecret("");
-    setWebhookSecret("");
-    setSupaUrl("");
-    setSupaKey("");
-    setSupaCapabilityConfig("");
-    setSupaQueryPolicy("");
-    setResendKey("");
-    setResendFromEmail("");
-    setResendFromName("");
-    load();
-  }, [tenantId]);
-
-  async function saveWoo() {
-    if (!url.trim() && !woo?.url) { toast("err", "Store URL is required"); return; }
-    setBusy(true);
-    try {
-      await updateIntegration(tenantId, {
-        provider: "woocommerce",
-        credentials: { url: url.trim() || woo?.url || undefined, consumer_key: key.trim() || undefined, consumer_secret: secret.trim() || undefined, webhook_secret: webhookSecret.trim() || undefined },
-      });
-      setShowWoo(false);
-      setUrl("");
-      setKey("");
-      setSecret("");
-      toast("ok", "WooCommerce connected");
-      await load();
-    } catch (e) {
-      toast("err", e instanceof Error ? e.message : "Failed to connect");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function saveSupa() {
-    const existingSupa = items?.find((i) => i.provider === "supabase");
-    const effectiveUrl = supaUrl.trim() || existingSupa?.url || "";
-    if (!effectiveUrl) {
-      toast("err", "Supabase project URL is required");
-      return;
-    }
-    let capabilityConfig: Record<string, unknown> | undefined;
-    let queryPolicy: Record<string, unknown> | undefined;
-    try {
-      capabilityConfig = supaCapabilityConfig.trim() ? JSON.parse(supaCapabilityConfig) : undefined;
-      queryPolicy = supaQueryPolicy.trim() ? JSON.parse(supaQueryPolicy) : undefined;
-    } catch {
-      toast("err", "Capability mapping and business-data policy must be valid JSON");
-      return;
-    }
-    setBusy(true);
-    try {
-      await updateIntegration(tenantId, {
-        provider: "supabase",
-        credentials: {
-          url: effectiveUrl,
-          anon_key: supaKey.trim() || undefined,
-          // Blank editors mean "keep the existing mapping/policy". Never
-          // silently erase a working capability configuration on credential updates.
-          capability_config: capabilityConfig,
-          query_policy: queryPolicy,
-        },
-      });
-      setShowSupa(false);
-      setSupaUrl("");
-      setSupaKey("");
-      setSupaCapabilityConfig("");
-      setSupaQueryPolicy("");
-      toast("ok", "Supabase connected");
-      await load();
-    } catch (e) {
-      toast("err", e instanceof Error ? e.message : "Failed to connect");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-
-  async function runTest(provider: "woocommerce" | "supabase" | "resend") {
-    setBusy(true);
-    try { const r = await testIntegration(tenantId, provider); toast(r.ok ? "ok" : "err", `${r.message} (${r.latencyMs}ms)`); }
-    catch (e) { toast("err", e instanceof Error ? e.message : "Health check failed"); }
-    finally { setBusy(false); }
-  }
-
-  async function saveResend() {
-    if (!resendFromEmail.trim()) {
-      toast("err", "From email is required");
-      return;
-    }
-    const existing = items?.find((i) => i.provider === "resend");
-    if (!existing?.hasApiKey && !resendKey.trim()) {
-      toast("err", "Resend API key is required");
-      return;
-    }
-    setBusy(true);
-    try {
-      await updateIntegration(tenantId, {
-        provider: "resend",
-        credentials: {
-          api_key: resendKey.trim() || undefined,
-          from_email: resendFromEmail.trim(),
-          from_name: resendFromName.trim() || undefined,
-        },
-      });
-      setShowResend(false);
-      setResendKey("");
-      toast("ok", "Resend email delivery configured");
-      await load();
-    } catch (e) {
-      toast("err", e instanceof Error ? e.message : "Failed to save Resend settings");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (error) return <ErrorBox message={error} />;
-  if (items === null) return <Spinner />;
-
-  const woo = items.find((i) => i.provider === "woocommerce");
-  const supa = items.find((i) => i.provider === "supabase");
-  const resend = items.find((i) => i.provider === "resend");
-
-  return (
-    <>
-      <div className="page-head">
-        <div>
-          <h1>Integrations</h1>
-          <p className="desc">Connect approved systems so the assistant can look up real data. WooCommerce and Supabase require Growth or Scale; Resend ticket email is available on every plan.</p>
-        </div>
-      </div>
-
-      {/* WooCommerce */}
-      <Card>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div>
-            <div style={{ fontWeight: 600 }}>WooCommerce</div>
-            <div className="muted" style={{ fontSize: 13 }}>
-              Products, orders, cart &amp; stock lookups
-            </div>
-          </div>
-          {woo ? (
-            <Badge tone={woo.configured ? "on" : "off"}>{woo.configured ? `Connected · ${woo.url}` : "Not configured"}</Badge>
-          ) : (
-            <Badge tone="off">Not configured</Badge>
-          )}
-        </div>
-
-        {liveIntegrationsLocked ? (
-          <div style={{ marginTop: 8 }}><div className="muted" style={{marginBottom:8}}>Locked on Starter. Upgrade to Growth to enable live commerce integrations.</div><button className="btn primary" onClick={onUpgrade}>Upgrade to Growth</button></div>
-        ) : !showWoo ? (
-          <div style={{ marginTop: 8 }}>
-            <button className="btn secondary" onClick={() => setShowWoo(true)}>
-              {woo?.configured ? "Update credentials" : "Connect store"}
-            </button>
-            {woo?.configured && <button className="btn ghost" disabled={busy} onClick={() => runTest("woocommerce")}>Test connection</button>}
-          </div>
-        ) : (
-          <div style={{ marginTop: 8 }}>
-            <Field label="Store URL">
-              <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://yourstore.com" />
-            </Field>
-            <Field label="Consumer key">
-              <input type="text" value={key} onChange={(e) => setKey(e.target.value)} placeholder={woo?.configured ? "Saved — leave blank to keep" : "ck_…"} />
-            </Field>
-            <Field label="Consumer secret">
-              <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={woo?.configured ? "Saved — leave blank to keep" : "cs_…"} />
-            </Field>
-            <Field label="Webhook signing secret (recommended)">
-              <input type="password" value={webhookSecret} onChange={(e)=>setWebhookSecret(e.target.value)} placeholder="Use the same secret in WooCommerce webhooks" />
-            </Field>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button className="btn" disabled={busy} onClick={saveWoo}>Save</button>
-              <button className="btn ghost" onClick={() => setShowWoo(false)}>Cancel</button>
-            </div>
-          </div>
-        )}
-      </Card>
-
-      {/* Supabase */}
-      <Card>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div>
-            <div style={{ fontWeight: 600 }}>Supabase</div>
-            <div className="muted" style={{ fontSize: 13 }}>
-              Connect your own database — the assistant can query your tables to answer customer questions about orders, bookings, subscriptions, etc.
-            </div>
-          </div>
-          {supa ? (
-            <Badge tone={supa.configured ? "on" : "off"}>{supa.configured ? `Connected · ${supa.url}` : "Not configured"}</Badge>
-          ) : (
-            <Badge tone="off">Not configured</Badge>
-          )}
-        </div>
-
-        {liveIntegrationsLocked ? (
-          <div style={{ marginTop: 8 }}><div className="muted" style={{marginBottom:8}}>Locked on Starter. Upgrade to Growth to enable database and business-data integrations.</div><button className="btn primary" onClick={onUpgrade}>Upgrade to Growth</button></div>
-        ) : !showSupa ? (
-          <div style={{ marginTop: 8 }}>
-            <button className="btn secondary" onClick={() => {
-              setShowSupa(true);
-              setSupaUrl(supa?.url ?? "");
-              setSupaCapabilityConfig(supa?.capabilityConfig ? JSON.stringify(supa.capabilityConfig, null, 2) : "");
-              setSupaQueryPolicy(supa?.queryPolicy ? JSON.stringify(supa.queryPolicy, null, 2) : "");
-            }}>
-              {supa?.configured ? "Update connection" : "Connect Supabase"}
-            </button>
-            {supa?.configured && <button className="btn ghost" disabled={busy} onClick={() => runTest("supabase")}>Test connection</button>}
-          </div>
-        ) : (
-          <div style={{ marginTop: 8 }}>
-            <Field label="Project URL">
-              <input type="url" value={supaUrl} onChange={(e) => setSupaUrl(e.target.value)} placeholder="https://your-project.supabase.co" />
-            </Field>
-            <Field label="Anon Key">
-              <input type="password" value={supaKey} onChange={(e) => setSupaKey(e.target.value)} placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." />
-            </Field>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-              Find these in Supabase Dashboard → Settings → API. The anon key is required for the assistant to query your tables.
-            </div>
-            <Field label="Capability mapping (optional JSON)">
-              <textarea
-                value={supaCapabilityConfig}
-                onChange={(e) => setSupaCapabilityConfig(e.target.value)}
-                rows={10}
-                placeholder={`{
-  "catalogue": {
-    "table": "products",
-    "fields": { "id": "id", "name": "name", "price": "price", "image_url": "image_url" }
-  },
-  "orders": {
-    "table": "orders",
-    "identityColumn": "customer_email"
-  }
-}`}
-              />
-            </Field>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-              Optional. Map your database to business capabilities. The AI still sees only generic tools such as search_products or track_order and never sees Supabase/table implementation details.
-            </div>
-            <Field label="Customer business-data resources (optional JSON)">
-              <textarea
-                value={supaQueryPolicy}
-                onChange={(e) => setSupaQueryPolicy(e.target.value)}
-                rows={10}
-                placeholder={`{
-  "tables": {
-    "bookings": {
-      "table": "customer_bookings",
-      "columns": ["id", "email", "date", "status"],
-      "identityColumn": "email",
-      "orderColumns": ["date"],
-      "maxRows": 20
-    }
-  }
-}`}
-              />
-            </Field>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-              Resource keys such as “bookings” are the only names exposed to the AI. Physical table names remain server-side configuration.
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button className="btn" disabled={busy} onClick={saveSupa}>Save</button>
-              <button className="btn ghost" onClick={() => setShowSupa(false)}>Cancel</button>
-            </div>
-          </div>
-        )}
-      </Card>
-
-      {/* Resend */}
-      <Card>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div>
-            <div style={{ fontWeight: 600 }}>Resend</div>
-            <div className="muted" style={{ fontSize: 13 }}>
-              Send support-ticket notifications from your organisation's own email domain.
-            </div>
-          </div>
-          {resend ? (
-            <Badge tone={resend.configured ? "on" : "off"}>
-              {resend.configured ? `Connected · ${resend.fromEmail ?? "sender configured"}` : "Not configured"}
-            </Badge>
-          ) : (
-            <Badge tone="off">Not configured</Badge>
-          )}
-        </div>
-
-        {!showResend ? (
-          <div style={{ marginTop: 8 }}>
-            <button
-              className="btn secondary"
-              onClick={() => {
-                setResendFromEmail(resend?.fromEmail ?? "");
-                setResendFromName(resend?.fromName ?? "");
-                setResendKey("");
-                setShowResend(true);
-              }}
-            >
-              {resend?.configured ? "Update Resend" : "Connect Resend"}
-            </button>
-            {resend?.configured && <button className="btn ghost" disabled={busy} onClick={() => runTest("resend")}>Test connection</button>}
-          </div>
-        ) : (
-          <div style={{ marginTop: 8 }}>
-            <Field label="Resend API key">
-              <input
-                type="password"
-                value={resendKey}
-                onChange={(e) => setResendKey(e.target.value)}
-                placeholder={resend?.hasApiKey ? "Saved — leave blank to keep current key" : "re_…"}
-                autoComplete="new-password"
-              />
-            </Field>
-            <Field label="From email">
-              <input
-                type="email"
-                value={resendFromEmail}
-                onChange={(e) => setResendFromEmail(e.target.value)}
-                placeholder="support@yourdomain.com"
-              />
-            </Field>
-            <Field label="From name (optional)">
-              <input
-                type="text"
-                value={resendFromName}
-                onChange={(e) => setResendFromName(e.target.value)}
-                placeholder="Your Company Support"
-              />
-            </Field>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-              The From email must use a domain verified in this tenant's Resend account. The API key is stored server-side and is never returned to the dashboard.
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button className="btn" disabled={busy} onClick={saveResend}>Save</button>
-              <button className="btn ghost" onClick={() => setShowResend(false)}>Cancel</button>
-            </div>
-          </div>
-        )}
-      </Card>
-    </>
-  );
+export default function IntegrationsPage({tenantId,entitlements,onUpgrade}:{tenantId:string;entitlements:PlanEntitlements|null;onUpgrade?:()=>void}){
+  const[items,setItems]=React.useState<ConnectorItem[]|null>(null);const[error,setError]=React.useState<string|null>(null);const[active,setActive]=React.useState<ConnectorItem|null>(null);const[values,setValues]=React.useState<Record<string,string>>({});const[busy,setBusy]=React.useState(false);const[category,setCategory]=React.useState("all");const[search,setSearch]=React.useState("");const[tab,setTab]=React.useState<"connections"|"actions">("connections");const[actions,setActions]=React.useState<ConnectorActionItem[]>([]);const[actionEdit,setActionEdit]=React.useState<Partial<ConnectorActionItem>|null>(null);const[actionSchema,setActionSchema]=React.useState("{}");const[actionMapping,setActionMapping]=React.useState("{}");
+  const locked=entitlements?!entitlements.liveIntegrations:false;
+  async function load(){try{const[r,a]=await Promise.all([listConnections(tenantId),listConnectorActions(tenantId)]);setItems(r.items);setActions(a.items);setError(null)}catch(e){setError(e instanceof Error?e.message:"Failed to load integrations")}}
+  React.useEffect(()=>{setItems(null);setActive(null);setError(null);void load()},[tenantId]);
+  React.useEffect(()=>{const u=new URL(window.location.href);const status=u.searchParams.get("oauth");if(!status)return;if(status==="success")toast("ok",`${u.searchParams.get("provider")??"Integration"} connected`);else toast("err",u.searchParams.get("message")||"OAuth connection failed");u.searchParams.delete("oauth");u.searchParams.delete("provider");u.searchParams.delete("message");window.history.replaceState({},"",u.pathname+(u.search?u.search:"")+u.hash);void load()},[]);
+  function open(item:ConnectorItem){setActive(item);const v:Record<string,string>={};for(const f of item.fields){const x=item.credentials?.[f.key];if(!f.secret&&x!=null)v[f.key]=typeof x==="object"?JSON.stringify(x,null,2):String(x);else v[f.key]=""}setValues(v)}
+  async function save(){if(!active)return;if(locked){onUpgrade?.();return}const creds:Record<string,unknown>={};for(const f of active.fields){const v=(values[f.key]??"").trim();if(v)creds[f.key]=v}setBusy(true);try{await saveConnection(tenantId,active.id,creds,true);toast("ok",`${active.name} connected`);setActive(null);await load()}catch(e){toast("err",e instanceof Error?e.message:"Connection failed")}finally{setBusy(false)}}
+  async function test(item:ConnectorItem){setBusy(true);try{const r=await testConnection(tenantId,item.id);toast(r.ok?"ok":"err",r.message);await load()}catch(e){toast("err",e instanceof Error?e.message:"Connection test failed");await load()}finally{setBusy(false)}}
+  async function disconnect(item:ConnectorItem){if(!confirm(`Disconnect ${item.name}? Existing sources that depend on it must be removed first.`))return;setBusy(true);try{await removeConnection(tenantId,item.id);toast("ok",`${item.name} disconnected`);await load()}catch(e){toast("err",e instanceof Error?e.message:"Disconnect failed")}finally{setBusy(false)}}
+  async function oauth(item:ConnectorItem){if(locked){onUpgrade?.();return}setBusy(true);try{const r=await startConnectorOAuth(tenantId,item.id);window.location.assign(r.url)}catch(e){toast("err",e instanceof Error?e.message:"Could not start OAuth connection");setBusy(false)}}
+  function openAction(a:Partial<ConnectorActionItem>){setActionEdit(a);setActionSchema(JSON.stringify(a.request_schema??{},null,2));setActionMapping(JSON.stringify(a.response_mapping??{},null,2));}
+  function openPreset(provider:string,t:any){openAction({provider,name:t.name,description:t.description??"",capability:t.capability,method:t.method,path_template:t.pathTemplate,request_schema:t.requestSchema??{},response_mapping:t.responseMapping??{},require_confirmation:t.requireConfirmation!==false,active:true})}
+  async function saveAction(){if(!actionEdit)return;setBusy(true);try{let schema:Record<string,unknown>;let mapping:Record<string,unknown>;try{schema=JSON.parse(actionSchema||"{}");mapping=JSON.parse(actionMapping||"{}")}catch{throw new Error("Input schema and response mapping must be valid JSON")}await saveConnectorAction(tenantId,{provider:actionEdit.provider,name:actionEdit.name,description:actionEdit.description,capability:actionEdit.capability,method:actionEdit.method,pathTemplate:actionEdit.path_template,requestSchema:schema,responseMapping:mapping,requireConfirmation:actionEdit.require_confirmation!==false,active:actionEdit.active!==false},actionEdit.id);setActionEdit(null);await load();toast("ok","Action saved")}catch(e){toast("err",e instanceof Error?e.message:"Could not save action")}finally{setBusy(false)}}
+  async function removeAction(a:ConnectorActionItem){if(!confirm(`Delete action “${a.name}”?`))return;setBusy(true);try{await deleteConnectorAction(tenantId,a.id);await load();toast("ok","Action deleted")}catch(e){toast("err",e instanceof Error?e.message:"Delete failed")}finally{setBusy(false)}}
+  if(error)return <ErrorBox message={error}/>;if(items===null)return <Spinner/>;
+  const categories=["all",...Array.from(new Set(items.map(i=>i.category)))];const shown=items.filter(i=>(category==="all"||i.category===category)&&(!search.trim()||(i.name+" "+i.capabilities.join(" ")).toLowerCase().includes(search.toLowerCase())));
+  const actionProviders=items.filter(i=>i.configured&&(i.actionTemplates?.length||i.capabilities.some(c=>!c.startsWith("knowledge."))));
+  return <div className="page integrations-page">
+    <div className="page-head"><div><h1>Integrations</h1><p className="desc">What your assistants can connect to and what they are allowed to do.</p></div>{locked&&<button className="btn primary" onClick={onUpgrade}>Upgrade for live integrations</button>}</div>
+    <div className="segmented"><button className={tab==="connections"?"active":""} onClick={()=>setTab("connections")}>Connections</button><button className={tab==="actions"?"active":""} onClick={()=>setTab("actions")}>Actions</button></div>
+    {tab==="connections"?<>
+      <div className="integration-toolbar"><input className="input" placeholder="Search integrations…" value={search} onChange={e=>setSearch(e.target.value)}/><select className="input" value={category} onChange={e=>setCategory(e.target.value)}>{categories.map(c=><option key={c} value={c}>{c==="all"?"All categories":CATEGORY_LABELS[c]??c}</option>)}</select></div>
+      <div className="integration-grid">{shown.map(item=><Card key={item.id} className="integration-card"><div className="integration-card-top"><div className="integration-logo">{item.name.slice(0,2).toUpperCase()}</div><div><h3>{item.name}</h3><div className="muted">{CATEGORY_LABELS[item.category]??item.category}</div></div><div className="integration-state">{item.configured?<Badge tone={item.health?.status==="failed"?"danger":"ok"}>{item.health?.status==="failed"?"Needs attention":"Connected"}</Badge>:<Badge tone="neutral">Not connected</Badge>}</div></div><p className="integration-caps">{item.capabilities.join(" · ")}</p>{item.health?.message&&<div className={`integration-health ${item.health.status}`}>{item.health.message}</div>}<div className="integration-buttons">{item.configured?<><button className="btn secondary sm" disabled={busy} onClick={()=>test(item)}>Test</button><button className="btn secondary sm" disabled={busy||locked} onClick={()=>open(item)}>Configure</button><button className="btn secondary sm danger-btn" disabled={busy||locked} onClick={()=>disconnect(item)}>Disconnect</button></>:<>{item.oauthAvailable&&<button className="btn primary sm" disabled={busy||locked} onClick={()=>void oauth(item)}>Connect securely</button>}<button className={item.oauthAvailable?"btn secondary sm":"btn primary sm"} disabled={locked} onClick={()=>locked?onUpgrade?.():open(item)}>{item.oauthAvailable?"Manual setup":"Connect"}</button></>}</div></Card>)}</div>
+    </>:<>
+      <Card className="actions-intro"><h2>Actions</h2><p className="desc">Define approved operations for connected systems. Actions use explicit methods and paths and can require confirmation before a write operation.</p><button className="btn primary" disabled={locked||actionProviders.length===0} onClick={()=>openAction({provider:actionProviders[0]?.id??"",name:"",description:"",capability:"custom.read",method:"GET",path_template:"/",request_schema:{type:"object",properties:{}},response_mapping:{},require_confirmation:true,active:true})}>+ Add action</button>{actionProviders.length===0&&<p className="muted">Connect a compatible integration first.</p>}</Card>
+      {actionProviders.some(p=>p.actionTemplates?.length)?<Card className="action-presets"><h3>Ready-made actions</h3><p className="muted">Start from a provider-approved preset, then review it before enabling.</p><div className="preset-grid">{actionProviders.flatMap(p=>(p.actionTemplates??[]).map(t=>({p,t}))).map(({p,t}:any)=>{const exists=actions.some(a=>a.provider===p.id&&a.name===t.name&&a.path_template===t.pathTemplate);return <button key={`${p.id}:${t.id}`} className="preset-button" disabled={exists||locked} onClick={()=>openPreset(p.id,t)}><strong>{t.name}</strong><span>{p.name} · {t.method} · {t.capability}</span>{exists&&<em>Already added</em>}</button>})}</div></Card>:null}
+      {actions.length===0?<Card><div className="empty-state"><h3>No custom actions</h3><p className="muted">Connected systems become callable only through the capabilities already built into ZoChat or an action you explicitly approve here. Custom actions are executed by the live assistant with server-side credentials; secrets never enter the model prompt.</p></div></Card>:<div className="action-list">{actions.map(a=><Card key={a.id} className="action-card"><div><div className="source-title-row"><h3>{a.name}</h3><Badge tone={a.active?"ok":"neutral"}>{a.active?"Active":"Disabled"}</Badge></div><div className="muted">{a.provider} · {a.method} {a.path_template} · {a.capability}</div>{a.description&&<p>{a.description}</p>}</div><div className="source-actions"><button className="btn secondary sm" onClick={()=>openAction(a)}>Edit</button><button className="btn secondary sm danger-btn" onClick={()=>removeAction(a)}>Delete</button></div></Card>)}</div>}
+    </>}
+    {active&&<div className="modal-overlay" onClick={()=>!busy&&setActive(null)}><div className="modal integration-modal" onClick={e=>e.stopPropagation()}><div className="modal-head"><div><h2>{active.configured?`Configure ${active.name}`:`Connect ${active.name}`}</h2><p className="desc">Secrets are encrypted before storage and are never returned to the browser.</p></div><button className="icon-button" onClick={()=>setActive(null)}>×</button></div>{active.fields.map(f=><Field key={f.key} label={f.label} hint={f.secret&&active.configured?"Leave blank to keep the existing secret.":undefined}>{f.type==="textarea"?<textarea rows={6} value={values[f.key]??""} onChange={e=>setValues(v=>({...v,[f.key]:e.target.value}))} placeholder={f.placeholder}/>:<input type={f.secret?"password":f.type==="url"?"url":"text"} value={values[f.key]??""} onChange={e=>setValues(v=>({...v,[f.key]:e.target.value}))} placeholder={f.secret&&active.configured?"••••••••":f.placeholder}/>}</Field>)}<div className="modal-actions"><button className="btn secondary" onClick={()=>setActive(null)}>Cancel</button><button className="btn primary" disabled={busy} onClick={save}>{busy?"Saving…":"Save connection"}</button></div></div></div>}
+    {actionEdit&&<div className="modal-overlay" onClick={()=>!busy&&setActionEdit(null)}><div className="modal integration-modal" onClick={e=>e.stopPropagation()}><div className="modal-head"><div><h2>{actionEdit.id?"Edit action":"New action"}</h2><p className="desc">Only define endpoints you explicitly trust the assistant to use.</p></div><button className="icon-button" onClick={()=>setActionEdit(null)}>×</button></div><Field label="Connection"><select value={actionEdit.provider??""} onChange={e=>setActionEdit(v=>({...v!,provider:e.target.value}))}>{actionProviders.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field><Field label="Action name"><input value={actionEdit.name??""} onChange={e=>setActionEdit(v=>({...v!,name:e.target.value}))} placeholder="Create appointment"/></Field><Field label="Description"><textarea value={actionEdit.description??""} onChange={e=>setActionEdit(v=>({...v!,description:e.target.value}))}/></Field><div className="form-grid-2"><Field label="Method"><select value={actionEdit.method??"GET"} onChange={e=>setActionEdit(v=>({...v!,method:e.target.value}))}>{["GET","POST","PUT","PATCH","DELETE"].map(m=><option key={m}>{m}</option>)}</select></Field><Field label="Capability"><input value={actionEdit.capability??"custom.read"} onChange={e=>setActionEdit(v=>({...v!,capability:e.target.value}))}/></Field></div><Field label="Path" hint="Relative to the connection base URL. Use placeholders such as /appointments/{id}."><input value={actionEdit.path_template??"/"} onChange={e=>setActionEdit(v=>({...v!,path_template:e.target.value}))}/></Field><Field label="Input schema (JSON)" hint='Optional JSON Schema. Required fields and basic types are enforced server-side.'><textarea rows={7} value={actionSchema} onChange={e=>setActionSchema(e.target.value)} spellCheck={false}/></Field><Field label="Response mapping (JSON)" hint='Optional: {"path":"data","fields":["id","status"]}'><textarea rows={5} value={actionMapping} onChange={e=>setActionMapping(e.target.value)} spellCheck={false}/></Field><label className="check-row"><input type="checkbox" checked={actionEdit.active!==false} onChange={e=>setActionEdit(v=>({...v!,active:e.target.checked}))}/><span><strong>Action enabled</strong><small>Disabled actions are not exposed to the live assistant.</small></span></label><label className="check-row"><input type="checkbox" checked={actionEdit.require_confirmation!==false} onChange={e=>setActionEdit(v=>({...v!,require_confirmation:e.target.checked}))}/><span><strong>Require confirmation for this action</strong><small>Write, payment, refund, cancel and delete actions are forced to require confirmation server-side.</small></span></label><div className="modal-actions"><button className="btn secondary" onClick={()=>setActionEdit(null)}>Cancel</button><button className="btn primary" disabled={busy} onClick={saveAction}>{busy?"Saving…":"Save action"}</button></div></div></div>}
+  </div>
 }

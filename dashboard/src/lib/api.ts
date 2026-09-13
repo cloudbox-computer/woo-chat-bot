@@ -6,9 +6,11 @@ import { getAccessToken } from "./supabase";
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -24,13 +26,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
+    let code: string | undefined;
     try {
-      const body = (await res.json()) as { error?: string };
+      const body = (await res.json()) as { error?: string; code?: string };
       if (body.error) message = body.error;
+      if (body.code) code = body.code;
     } catch {
       /* ignore */
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, code);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -360,13 +364,17 @@ export function updateTicket(
 // --- enterprise ------------------------------------------------------------
 export interface AuditItem { id:string; actor_email?:string|null; action:string; resource_type:string; resource_id?:string|null; metadata?:Record<string,unknown>; created_at:string; }
 export interface TeamItem { id:string; user_id:string; role:"owner"|"admin"|"agent"|"viewer"; created_at:string; }
-export interface EnterpriseSettings { plan?:string; billing_enforced?:boolean; allowed_origins?:string[]; retention_days?:number; monthly_request_limit?:number; monthly_token_limit?:number; feature_flags?:Record<string,boolean>; data_region?:string; }
+export interface EnterpriseSettings { plan?:string; billing_enforced?:boolean; allowed_origins?:string[]; retention_days?:number; monthly_request_limit?:number; monthly_token_limit?:number; feature_flags?:Record<string,boolean>; data_region?:string; zero_data_retention?:boolean; store_conversations?:boolean; pii_redaction_enabled?:boolean; hipaa_mode?:boolean; baa_status?:"none"|"requested"|"signed"; mfa_required?:boolean; ip_allowlist?:string[]; incident_contact_email?:string|null; security_contact_email?:string|null; model_training_opt_out?:boolean; }
+export interface SecurityIncidentItem { id:string; title:string; description:string; severity:"info"|"warning"|"critical"; status:"open"|"investigating"|"contained"|"resolved"; reported_by?:string|null; resolved_at?:string|null; created_at:string; updated_at:string; }
 export function getAudit(tenantId:string) { return request<{items:AuditItem[]}>(`/dashboard${tenantQuery(tenantId,"audit")}`); }
 export function getTeam(tenantId:string) { return request<{items:TeamItem[];currentUserId:string;currentRole:string}>(`/dashboard${tenantQuery(tenantId,"team")}`); }
 export function updateTeamRole(tenantId:string,id:string,role:TeamItem["role"]) { return request<{ok:boolean}>(`/dashboard${tenantQuery(tenantId,"team",{id})}`,{method:"PUT",body:JSON.stringify({role})}); }
 export function removeTeamMember(tenantId:string,id:string) { return request<{ok:boolean}>(`/dashboard${tenantQuery(tenantId,"team",{id})}`,{method:"DELETE"}); }
 export function getEnterprise(tenantId:string) { return request<{settings:EnterpriseSettings}>(`/dashboard${tenantQuery(tenantId,"enterprise")}`); }
 export function updateEnterprise(tenantId:string,patch:Record<string,unknown>) { return request<{ok:boolean}>(`/dashboard${tenantQuery(tenantId,"enterprise")}`,{method:"PUT",body:JSON.stringify(patch)}); }
+export function listSecurityIncidents(tenantId:string){return request<{items:SecurityIncidentItem[]}>(`/dashboard${tenantQuery(tenantId,"incidents")}`);}
+export function createSecurityIncident(tenantId:string,input:{title:string;description:string;severity:SecurityIncidentItem["severity"]}){return request<{ok:boolean;id:string}>(`/dashboard${tenantQuery(tenantId,"incidents")}`,{method:"POST",body:JSON.stringify(input)});}
+export function updateSecurityIncident(tenantId:string,id:string,patch:{status?:SecurityIncidentItem["status"];severity?:SecurityIncidentItem["severity"];description?:string}){return request<{ok:boolean}>(`/dashboard${tenantQuery(tenantId,"incidents",{id})}`,{method:"PATCH",body:JSON.stringify(patch)});}
 export function getOperations(tenantId:string) { return request<{health:Array<Record<string,unknown>>;jobs:Array<Record<string,unknown>>;usage:Record<string,unknown>}>(`/dashboard${tenantQuery(tenantId,"operations")}`); }
 export function getTranscript(tenantId:string,id:string) { return request<{conversation:Record<string,unknown>;messages:Array<Record<string,unknown>>}>(`/dashboard${tenantQuery(tenantId,"transcript",{id})}`); }
 export function submitGdpr(tenantId:string,email:string,requestType:"export"|"erase") { return request<{ok:boolean;requestId:string;data?:unknown}>(`/dashboard${tenantQuery(tenantId,"gdpr")}`,{method:"POST",body:JSON.stringify({email,requestType})}); }
@@ -378,6 +386,43 @@ export function sendAgentMessage(tenantId:string,conversationId:string,message:s
 
 export function inviteTeamMember(tenantId:string,email:string,role:TeamItem["role"]){return request<{ok:boolean}>(`/dashboard${tenantQuery(tenantId,"team")}`,{method:"POST",body:JSON.stringify({email,role})});}
 
+
+
+
+// --- data sources + universal connectors ----------------------------------
+export type DataSourceKind = "file"|"website"|"sitemap"|"url"|"text"|"qa"|"notion"|"google_drive"|"dropbox"|"zendesk"|"wordpress";
+export interface DataSourceItem {
+  id:string; tenant_id:string; chatbot_id:string; kind:DataSourceKind; name:string;
+  status:"pending"|"syncing"|"ready"|"error"|"paused"; config:Record<string,unknown>;
+  connection_provider?:string|null; object_path?:string|null; sync_interval_minutes?:number|null;
+  next_sync_at?:string|null; last_sync_at?:string|null; last_error?:string|null;
+  document_count:number; chunk_count:number; created_at:string; updated_at:string;
+}
+export interface SourceDocumentItem { id:string; external_id:string; title:string; source_url?:string|null; mime_type?:string|null; byte_size?:number|null; metadata?:Record<string,unknown>; indexed_at:string; }
+export interface ConnectorField { key:string; label:string; secret?:boolean; required?:boolean; placeholder?:string; type?:"text"|"url"|"textarea"; }
+export interface ConnectorActionTemplate { id:string; name:string; description:string; capability:string; method:string; pathTemplate:string; requestSchema:Record<string,unknown>; responseMapping?:Record<string,unknown>; requireConfirmation?:boolean; }
+export interface ConnectorItem {
+  id:string; name:string; category:string; capabilities:string[]; sourceKinds?:string[]; fields:ConnectorField[]; docsUrl?:string; actionTemplates?:ConnectorActionTemplate[];
+  configured:boolean; active:boolean; credentials:Record<string,unknown>; oauthAvailable?:boolean;
+  health?:{provider:string;status:string;message?:string|null;checked_at?:string|null;latency_ms?:number|null}|null;
+}
+export interface ConnectorActionItem { id:string; provider:string; name:string; description:string; capability:string; method:string; path_template:string; request_schema:Record<string,unknown>; response_mapping:Record<string,unknown>; require_confirmation:boolean; active:boolean; created_at:string; }
+
+function sourceQuery(tenantId:string,action:string,extra?:Record<string,string>){const q=new URLSearchParams({tenantId,action,...(extra??{})});return `/data-sources?${q.toString()}`;}
+export function listDataSources(tenantId:string,chatbotId?:string){return request<{items:DataSourceItem[]}>(sourceQuery(tenantId,"sources",chatbotId?{chatbotId}:undefined));}
+export function createDataSource(tenantId:string,input:{chatbotId:string;kind:DataSourceKind;name:string;config:Record<string,unknown>;syncIntervalMinutes?:number|null}){return request<{item:DataSourceItem;uploadPath?:string|null}>(sourceQuery(tenantId,"sources"),{method:"POST",body:JSON.stringify(input)});}
+export function updateDataSource(tenantId:string,id:string,patch:Record<string,unknown>){return request<{ok:boolean}>(sourceQuery(tenantId,"sources",{id}),{method:"PUT",body:JSON.stringify(patch)});}
+export function deleteDataSource(tenantId:string,id:string){return request<{ok:boolean}>(sourceQuery(tenantId,"sources",{id}),{method:"DELETE"});}
+export function syncDataSource(tenantId:string,id:string){return request<{ok:boolean;jobId:string}>(sourceQuery(tenantId,"sync",{id}),{method:"POST"});}
+export function listSourceDocuments(tenantId:string,id:string){return request<{items:SourceDocumentItem[]}>(sourceQuery(tenantId,"documents",{id}));}
+export function listConnections(tenantId:string){return request<{items:ConnectorItem[]}>(sourceQuery(tenantId,"connections"));}
+export function saveConnection(tenantId:string,provider:string,credentials:Record<string,unknown>,active=true){return request<{ok:boolean}>(sourceQuery(tenantId,"connections"),{method:"PUT",body:JSON.stringify({provider,credentials,active})});}
+export function removeConnection(tenantId:string,provider:string){return request<{ok:boolean}>(sourceQuery(tenantId,"connections",{provider}),{method:"DELETE"});}
+export function testConnection(tenantId:string,provider:string){return request<{ok:boolean;status:string;message:string;latencyMs:number}>(sourceQuery(tenantId,"connection_test"),{method:"POST",body:JSON.stringify({provider})});}
+export function listConnectorActions(tenantId:string){return request<{items:ConnectorActionItem[]}>(sourceQuery(tenantId,"actions"));}
+export function saveConnectorAction(tenantId:string,input:Record<string,unknown>,id?:string){return request<{ok:boolean;id:string}>(sourceQuery(tenantId,"actions",id?{id}:undefined),{method:id?"PUT":"POST",body:JSON.stringify(input)});}
+export function deleteConnectorAction(tenantId:string,id:string){return request<{ok:boolean}>(sourceQuery(tenantId,"actions",{id}),{method:"DELETE"});}
+export function startConnectorOAuth(tenantId:string,provider:string){const q=new URLSearchParams({action:"start",tenantId,provider});return request<{url:string;expiresAt:string}>(`/connector-oauth-start?${q.toString()}`,{method:"POST"});}
 
 // --- Stripe billing --------------------------------------------------------
 export type BillingPlanKey = "starter" | "growth" | "scale";

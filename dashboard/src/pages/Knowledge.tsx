@@ -17,6 +17,7 @@ const SOURCE_TYPES: Array<{kind:DataSourceKind;name:string;desc:string}> = [
   {kind:"google_drive",name:"Google Drive",desc:"Sync supported files from Drive or a folder"},
   {kind:"dropbox",name:"Dropbox",desc:"Sync supported files from a Dropbox path"},
   {kind:"zendesk",name:"Zendesk",desc:"Sync Help Center articles"},
+  {kind:"wordpress",name:"WordPress",desc:"Sync published pages and posts"},
 ];
 const ACCEPT = ".pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.pptx,.html,.htm,.json";
 
@@ -106,7 +107,7 @@ export default function KnowledgePage({ tenantId }: { tenantId: string }) {
       {kind==="qa"&&<div className="qa-editor"><label>Questions & answers</label>{qaPairs.map((p,i)=><Card key={i} className="qa-row"><Field label={`Question ${i+1}`}><input value={p.question} onChange={e=>setQaPairs(v=>v.map((x,j)=>j===i?{...x,question:e.target.value}:x))}/></Field><Field label="Answer"><textarea value={p.answer} onChange={e=>setQaPairs(v=>v.map((x,j)=>j===i?{...x,answer:e.target.value}:x))}/></Field>{qaPairs.length>1&&<button className="btn secondary sm" onClick={()=>setQaPairs(v=>v.filter((_,j)=>j!==i))}>Remove</button>}</Card>)}<button className="btn secondary sm" onClick={()=>setQaPairs(v=>[...v,{question:"",answer:""}])}>+ Add Q&A</button></div>}
       {kind==="google_drive"&&<Field label="Folder ID" hint="Optional. Leave blank to index accessible Drive files."><input value={folderId} onChange={e=>setFolderId(e.target.value)} placeholder="Google Drive folder ID"/></Field>}
       {kind==="dropbox"&&<Field label="Dropbox path" hint="Leave blank for the connected app root."><input value={dropboxPath} onChange={e=>setDropboxPath(e.target.value)} placeholder="/Support"/></Field>}
-      {["notion","google_drive","dropbox","zendesk"].includes(kind)&&<div className="info-banner">This source uses the matching connection in <button className="link-button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("page","integrations");window.history.pushState({},"",u);window.dispatchEvent(new PopStateEvent("popstate"));}}>Integrations</button>.</div>}
+      {["notion","google_drive","dropbox","zendesk","wordpress"].includes(kind)&&<div className="info-banner">This source uses the matching connection in <button className="link-button" onClick={()=>{const u=new URL(window.location.href);u.searchParams.set("page","integrations");window.history.pushState({},"",u);window.dispatchEvent(new PopStateEvent("popstate"));}}>Integrations</button>.</div>}
       {!(["text","qa"].includes(kind))&&<Field label="Automatic refresh"><select value={syncMinutes??""} onChange={e=>setSyncMinutes(e.target.value?Number(e.target.value):null)}><option value="">Manual only</option><option value={60}>Every hour</option><option value={360}>Every 6 hours</option><option value={1440}>Every 24 hours</option><option value={10080}>Every 7 days</option></select></Field>}
       <div className="modal-actions"><button className="btn secondary" disabled={busy} onClick={()=>setShowAdd(false)}>Cancel</button><button className="btn primary" disabled={busy} onClick={create}>{busy?"Adding…":"Add source"}</button></div>
     </div></div>}

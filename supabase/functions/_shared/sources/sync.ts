@@ -1,11 +1,12 @@
 import { supabaseConfig } from "../env.ts";
 import { decryptSecret } from "../secrets.ts";
+import { encryptCredentials } from "../connectors/registry.ts";
 
 export interface SourceRow {
   id: string;
   tenant_id: string;
   chatbot_id: string;
-  kind: "file"|"website"|"sitemap"|"url"|"text"|"qa"|"notion"|"google_drive"|"dropbox"|"zendesk";
+  kind: "file"|"website"|"sitemap"|"url"|"text"|"qa"|"notion"|"google_drive"|"dropbox"|"zendesk"|"wordpress";
   name: string;
   status: string;
   config: Record<string, unknown>;
@@ -60,10 +61,19 @@ async function connectionCredentials(tenantId: string, provider: string): Promis
   if (!rows[0]) throw new Error(`${provider} is not connected`);
   const raw = (rows[0].credentials ?? {}) as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const [k,v] of Object.entries(raw)) {
-    out[k] = typeof v === "string" && v.startsWith("enc:v1:") ? await decryptSecret(v) : v;
-  }
+  for (const [k,v] of Object.entries(raw)) out[k] = typeof v === "string" && v.startsWith("enc:v1:") ? await decryptSecret(v) : v;
   return out;
+}
+async function persistSourceCredentials(tenantId:string,provider:string,plain:Record<string,unknown>):Promise<void>{
+  const rows=await dbRows("integrations",{tenant_id:`eq.${tenantId}`,provider:`eq.${provider}`,active:"eq.true",select:"id,credentials",limit:"1"});if(!rows[0])throw new Error(`${provider} is not connected`);const stored=(rows[0].credentials??{}) as Record<string,unknown>;const encrypted=await encryptCredentials(provider,plain,stored);await dbPatch(`integrations?id=eq.${rows[0].id}`,{credentials:encrypted});
+}
+async function refreshSourceOAuth(tenantId:string,provider:string,creds:Record<string,unknown>):Promise<Record<string,unknown>>{
+  try{
+    if(provider==="google_drive"&&creds.refresh_token&&creds.client_id&&creds.client_secret){const body=new URLSearchParams({client_id:String(creds.client_id),client_secret:String(creds.client_secret),refresh_token:String(creds.refresh_token),grant_type:"refresh_token"});const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body});if(r.ok){const d=await r.json() as any;if(d.access_token){const next={...creds,access_token:String(d.access_token)};await persistSourceCredentials(tenantId,provider,next);return next}}}
+    if(provider==="dropbox"&&creds.refresh_token&&creds.app_key&&creds.app_secret){const body=new URLSearchParams({grant_type:"refresh_token",refresh_token:String(creds.refresh_token),client_id:String(creds.app_key),client_secret:String(creds.app_secret)});const r=await fetch("https://api.dropboxapi.com/oauth2/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body});if(r.ok){const d=await r.json() as any;if(d.access_token){const next={...creds,access_token:String(d.access_token)};await persistSourceCredentials(tenantId,provider,next);return next}}}
+    if(provider==="notion"&&creds.refresh_token){const clientId=Deno.env.get("NOTION_OAUTH_CLIENT_ID")??"";const clientSecret=Deno.env.get("NOTION_OAUTH_CLIENT_SECRET")??"";if(clientId&&clientSecret){const r=await fetch("https://api.notion.com/v1/oauth/token",{method:"POST",headers:{Authorization:`Basic ${btoa(`${clientId}:${clientSecret}`)}`,"Content-Type":"application/json","Notion-Version":"2026-03-11"},body:JSON.stringify({grant_type:"refresh_token",refresh_token:String(creds.refresh_token)})});if(r.ok){const d=await r.json() as any;if(d.access_token){const next={...creds,token:String(d.access_token),refresh_token:d.refresh_token?String(d.refresh_token):creds.refresh_token};await persistSourceCredentials(tenantId,provider,next);return next}}}}
+  }catch{/* keep current token and surface the upstream authentication error */}
+  return creds;
 }
 
 function normalizeText(input: string): string {
@@ -267,10 +277,10 @@ async function fromQa(source:SourceRow):Promise<IndexedDocument[]>{
 }
 
 async function fromNotion(source:SourceRow):Promise<IndexedDocument[]>{
-  const creds=await connectionCredentials(source.tenant_id,"notion"); const token=String(creds.token??creds.api_key??""); if(!token)throw new Error("Notion token missing");
-  const headers={Authorization:`Bearer ${token}`,"Notion-Version":"2022-06-28","Content-Type":"application/json"}; const docs:IndexedDocument[]=[]; let cursor:string|undefined; let pages=0;
+  let creds=await connectionCredentials(source.tenant_id,"notion"); let token=String(creds.token??creds.api_key??""); if(!token)throw new Error("Notion token missing");
+  let headers={Authorization:`Bearer ${token}`,"Notion-Version":"2026-03-11","Content-Type":"application/json"}; const docs:IndexedDocument[]=[]; let cursor:string|undefined; let pages=0;let refreshed=false;
   do{
-    const rr=await fetch("https://api.notion.com/v1/search",{method:"POST",headers,body:JSON.stringify({filter:{property:"object",value:"page"},page_size:100,start_cursor:cursor})});if(!rr.ok)throw new Error(`Notion API ${rr.status}`);const data=await rr.json() as any;
+    let rr=await fetch("https://api.notion.com/v1/search",{method:"POST",headers,body:JSON.stringify({filter:{property:"object",value:"page"},page_size:100,start_cursor:cursor})});if((rr.status===401||rr.status===403)&&!refreshed){creds=await refreshSourceOAuth(source.tenant_id,"notion",creds);token=String(creds.token??"");headers={Authorization:`Bearer ${token}`,"Notion-Version":"2026-03-11","Content-Type":"application/json"};refreshed=true;rr=await fetch("https://api.notion.com/v1/search",{method:"POST",headers,body:JSON.stringify({filter:{property:"object",value:"page"},page_size:100,start_cursor:cursor})})}if(!rr.ok)throw new Error(`Notion API ${rr.status}`);const data=await rr.json() as any;
     for(const page of data.results??[]){if(docs.length>=500)break;const titleProp=Object.values(page.properties??{}).find((p:any)=>p?.type==="title") as any;const title=(titleProp?.title??[]).map((x:any)=>x.plain_text??"").join("")||"Notion page";const blocks:string[]=[];let bc:string|undefined;
       do{const br=await fetch(`https://api.notion.com/v1/blocks/${page.id}/children?page_size=100${bc?`&start_cursor=${encodeURIComponent(bc)}`:""}`,{headers});if(!br.ok)break;const bd=await br.json() as any;for(const b of bd.results??[]){const payload=(b as any)[b.type];const rich=payload?.rich_text;if(Array.isArray(rich)){const t=rich.map((x:any)=>x.plain_text??"").join("");if(t)blocks.push(t)}}bc=bd.has_more?bd.next_cursor:undefined}while(bc&&blocks.length<2000);
       const doc=await makeDoc(page.id,title,blocks.join("\n"),{sourceUrl:page.url,mimeType:"application/notion-page",metadata:{notionId:page.id}});if(doc)docs.push(doc);
@@ -279,21 +289,19 @@ async function fromNotion(source:SourceRow):Promise<IndexedDocument[]>{
   }while(cursor&&pages<10&&docs.length<500);
   if(!docs.length)throw new Error("No readable Notion pages found");return docs;
 }
-async function googleAccessToken(creds:Record<string,unknown>):Promise<string>{
-  const token=String(creds.access_token??creds.token??""); const refresh=String(creds.refresh_token??""); const clientId=String(creds.client_id??""); const clientSecret=String(creds.client_secret??"");
-  if(refresh&&clientId&&clientSecret){const body=new URLSearchParams({client_id:clientId,client_secret:clientSecret,refresh_token:refresh,grant_type:"refresh_token"});const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body});if(r.ok){const d=await r.json() as any;if(d.access_token)return String(d.access_token)}}
-  if(!token)throw new Error("Google Drive access token missing");return token;
+async function googleAccessToken(tenantId:string,creds:Record<string,unknown>):Promise<string>{
+  const token=String(creds.access_token??creds.token??""); const refreshed=await refreshSourceOAuth(tenantId,"google_drive",creds);const next=String(refreshed.access_token??refreshed.token??token);if(!next)throw new Error("Google Drive access token missing");return next;
 }
 async function fromGoogleDrive(source:SourceRow):Promise<IndexedDocument[]>{
-  const creds=await connectionCredentials(source.tenant_id,"google_drive"); const token=await googleAccessToken(creds); const headers={Authorization:`Bearer ${token}`}; const folder=String(source.config.folderId??""); const q=["trashed=false",folder?`'${folder.replace(/'/g,"\\'")}' in parents`:""].filter(Boolean).join(" and "); let pageToken="";const docs:IndexedDocument[]=[];
+  const creds=await connectionCredentials(source.tenant_id,"google_drive"); const token=await googleAccessToken(source.tenant_id,creds); const headers={Authorization:`Bearer ${token}`}; const folder=String(source.config.folderId??""); const q=["trashed=false",folder?`'${folder.replace(/'/g,"\\'")}' in parents`:""].filter(Boolean).join(" and "); let pageToken="";const docs:IndexedDocument[]=[];
   do{const u=new URL("https://www.googleapis.com/drive/v3/files");u.searchParams.set("q",q);u.searchParams.set("pageSize","100");u.searchParams.set("fields","nextPageToken,files(id,name,mimeType,webViewLink,size,modifiedTime)");if(pageToken)u.searchParams.set("pageToken",pageToken);const lr=await fetch(u,{headers});if(!lr.ok)throw new Error(`Google Drive API ${lr.status}`);const data=await lr.json() as any;
     for(const f of data.files??[]){if(docs.length>=500)break;let endpoint=`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}?alt=media`;if(String(f.mimeType).startsWith("application/vnd.google-apps.")){const exports:Record<string,string>={"application/vnd.google-apps.document":"text/plain","application/vnd.google-apps.spreadsheet":"text/csv","application/vnd.google-apps.presentation":"application/vnd.openxmlformats-officedocument.presentationml.presentation"};const target=exports[f.mimeType];if(!target)continue;endpoint=`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}/export?mimeType=${encodeURIComponent(target)}`}
       const rr=await fetch(endpoint,{headers});if(!rr.ok)continue;const bytes=await readLimitedBytes(rr,52_428_800);let text="";try{text=await parseFile(f.name,bytes,rr.headers.get("content-type")??f.mimeType)}catch{continue}const doc=await makeDoc(f.id,f.name,text,{sourceUrl:f.webViewLink,mimeType:f.mimeType,byteSize:Number(f.size??bytes.byteLength),metadata:{modifiedTime:f.modifiedTime}});if(doc)docs.push(doc)} pageToken=String(data.nextPageToken??"");
   }while(pageToken&&docs.length<500);if(!docs.length)throw new Error("No readable Google Drive files found");return docs;
 }
 async function fromDropbox(source:SourceRow):Promise<IndexedDocument[]>{
-  const creds=await connectionCredentials(source.tenant_id,"dropbox");const token=String(creds.access_token??creds.token??"");if(!token)throw new Error("Dropbox token missing");const headers={Authorization:`Bearer ${token}`,"Content-Type":"application/json"};const path=String(source.config.path??"");let endpoint="https://api.dropboxapi.com/2/files/list_folder";let body:any={path,recursive:true,limit:200};const entries:any[]=[];
-  for(let i=0;i<10;i++){const r=await fetch(endpoint,{method:"POST",headers,body:JSON.stringify(body)});if(!r.ok)throw new Error(`Dropbox API ${r.status}`);const d=await r.json() as any;entries.push(...(d.entries??[]).filter((e:any)=>e[".tag"]==="file"));if(!d.has_more)break;endpoint="https://api.dropboxapi.com/2/files/list_folder/continue";body={cursor:d.cursor}}
+  let creds=await connectionCredentials(source.tenant_id,"dropbox");let token=String(creds.access_token??creds.token??"");if(!token)throw new Error("Dropbox token missing");let headers={Authorization:`Bearer ${token}`,"Content-Type":"application/json"};const path=String(source.config.path??"");let endpoint="https://api.dropboxapi.com/2/files/list_folder";let body:any={path,recursive:true,limit:200};const entries:any[]=[];let refreshed=false;
+  for(let i=0;i<10;i++){let r=await fetch(endpoint,{method:"POST",headers,body:JSON.stringify(body)});if((r.status===401||r.status===403)&&!refreshed){creds=await refreshSourceOAuth(source.tenant_id,"dropbox",creds);token=String(creds.access_token??"");headers={Authorization:`Bearer ${token}`,"Content-Type":"application/json"};refreshed=true;r=await fetch(endpoint,{method:"POST",headers,body:JSON.stringify(body)})}if(!r.ok)throw new Error(`Dropbox API ${r.status}`);const d=await r.json() as any;entries.push(...(d.entries??[]).filter((e:any)=>e[".tag"]==="file"));if(!d.has_more)break;endpoint="https://api.dropboxapi.com/2/files/list_folder/continue";body={cursor:d.cursor}}
   const docs:IndexedDocument[]=[];for(const f of entries.slice(0,500)){const r=await fetch("https://content.dropboxapi.com/2/files/download",{method:"POST",headers:{Authorization:`Bearer ${token}`,"Dropbox-API-Arg":JSON.stringify({path:f.path_lower})}});if(!r.ok)continue;const bytes=await readLimitedBytes(r,52_428_800);let text="";try{text=await parseFile(f.name,bytes,r.headers.get("content-type")??"application/octet-stream")}catch{continue}const doc=await makeDoc(f.id,f.name,text,{sourceUrl:`https://www.dropbox.com/home${f.path_display??f.path_lower}`,byteSize:Number(f.size??bytes.byteLength),metadata:{rev:f.rev,modified:f.server_modified}});if(doc)docs.push(doc)}if(!docs.length)throw new Error("No readable Dropbox files found");return docs;
 }
 async function fromZendesk(source:SourceRow):Promise<IndexedDocument[]>{
@@ -302,9 +310,40 @@ async function fromZendesk(source:SourceRow):Promise<IndexedDocument[]>{
   if(!docs.length)throw new Error("No Zendesk Help Center articles found");return docs;
 }
 
+
+async function fromWordPress(source:SourceRow):Promise<IndexedDocument[]> {
+  const creds=await connectionCredentials(source.tenant_id,"wordpress");
+  const base=String(creds.url??"").replace(/\/$/,"");
+  const username=String(creds.username??""); const appPassword=String(creds.app_password??"");
+  if(!base||!username||!appPassword)throw new Error("WordPress connection is incomplete");
+  await assertPublicUrl(base);
+  const auth=`Basic ${btoa(`${username}:${appPassword}`)}`;
+  const headers={Authorization:auth,Accept:"application/json"};
+  const docs:IndexedDocument[]=[];
+  for(const type of ["pages","posts"]){
+    for(let page=1;page<=10&&docs.length<500;page++){
+      const url=`${base}/wp-json/wp/v2/${type}?context=view&status=publish&per_page=100&page=${page}&_fields=id,link,slug,title,content,excerpt,modified_gmt`;
+      const r=await safeFetch(url,{headers});
+      if(r.status===400&&page>1)break;
+      if(!r.ok)throw new Error(`WordPress API ${r.status}`);
+      const rows=await r.json() as any[];
+      if(!Array.isArray(rows)||rows.length===0)break;
+      for(const item of rows){
+        const title=stripHtml(String(item?.title?.rendered??item?.slug??"WordPress content"));
+        const content=[item?.content?.rendered,item?.excerpt?.rendered].filter(Boolean).map((x:any)=>stripHtml(String(x))).join("\n\n");
+        const doc=await makeDoc(`${type}:${String(item.id)}`,title,content,{sourceUrl:String(item.link??""),mimeType:"text/html",metadata:{postType:type,id:item.id,slug:item.slug,modified:item.modified_gmt}});
+        if(doc)docs.push(doc);
+      }
+      if(rows.length<100)break;
+    }
+  }
+  if(!docs.length)throw new Error("No published WordPress pages or posts could be indexed");
+  return docs;
+}
+
 async function gather(source:SourceRow):Promise<IndexedDocument[]>{
   switch(source.kind){
-    case"file":return fromFile(source);case"website":return crawlWebsite(source);case"sitemap":return fromSitemap(source);case"url":return fromSingleUrl(source);case"text":return fromText(source);case"qa":return fromQa(source);case"notion":return fromNotion(source);case"google_drive":return fromGoogleDrive(source);case"dropbox":return fromDropbox(source);case"zendesk":return fromZendesk(source);default:throw new Error(`Unsupported source type ${source.kind}`);
+    case"file":return fromFile(source);case"website":return crawlWebsite(source);case"sitemap":return fromSitemap(source);case"url":return fromSingleUrl(source);case"text":return fromText(source);case"qa":return fromQa(source);case"notion":return fromNotion(source);case"google_drive":return fromGoogleDrive(source);case"dropbox":return fromDropbox(source);case"zendesk":return fromZendesk(source);case"wordpress":return fromWordPress(source);default:throw new Error(`Unsupported source type ${source.kind}`);
   }
 }
 async function replaceIndex(sourceId:string,docs:IndexedDocument[]):Promise<{documentCount:number;chunkCount:number}>{

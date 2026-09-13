@@ -50,3 +50,9 @@ verify_jwt = false
 
 [functions.data-sources]
 verify_jwt = true
+
+[functions.connector-oauth]
+verify_jwt = false
+
+[functions.connector-oauth-start]
+verify_jwt = true

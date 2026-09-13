@@ -20,6 +20,7 @@ export interface Db {
   createConversation(c: Conversation): Promise<void>;
   getConversation(id: string): Promise<Conversation | null>;
   setConversationEmail(conversationId: string, email: string, consent?: boolean): Promise<void>;
+  recordConsent(tenantId: string, conversationId: string, subject: string | undefined, consentType: string, granted: boolean, source?: string): Promise<void>;
   getMessages(conversationId: string): Promise<Message[]>;
   appendMessage(m: Message): Promise<void>;
   logFeedback(f: Feedback): Promise<void>;
@@ -88,6 +89,7 @@ export class MemoryDb implements Db {
       if (consent !== undefined) c.emailConsent = consent;
     }
   }
+  async recordConsent(_tenantId: string, _conversationId: string, _subject: string | undefined, _consentType: string, _granted: boolean, _source = "widget"): Promise<void> { /* in-memory tests do not persist compliance ledgers */ }
   async getConversation(id: string): Promise<Conversation | null> {
     return this.conversations.find((c) => c.id === id) ?? null;
   }
@@ -175,6 +177,8 @@ export class SupabaseDb implements Db {
     const wooCreds = (wooInteg?.credentials ?? {}) as Record<string, string>;
     const resendInteg = integ?.find((i) => i.provider === "resend" && i.active !== false);
     const resendCreds = (resendInteg?.credentials ?? {}) as Record<string, string>;
+    const shopifyInteg = integ?.find((i) => i.provider === "shopify" && i.active !== false);
+    const shopifyCreds = (shopifyInteg?.credentials ?? {}) as Record<string, string>;
     const scope = (row.scope ?? {}) as Record<string, unknown>;
     const allowedTopics = scope.allowedTopics;
     const refusalMessage = row.refusal_message ? String(row.refusal_message) : undefined;
@@ -188,6 +192,10 @@ export class SupabaseDb implements Db {
       billingEnforced: row.billing_enforced === true,
       subscriptionStatus: row.subscription_status ? String(row.subscription_status) : undefined,
       maxAssistants: Number(row.max_assistants ?? 1),
+      zeroDataRetention: row.zero_data_retention === true,
+      storeConversations: row.zero_data_retention === true ? false : row.store_conversations !== false,
+      piiRedactionEnabled: row.pii_redaction_enabled !== false,
+      hipaaMode: row.hipaa_mode === true,
       storeUrl: row.store_url ? String(row.store_url) : undefined,
       welcomeMessage: String(row.welcome_message ?? ""),
       assistantHeaderMessage: row.assistant_header_message ? String(row.assistant_header_message) : undefined,
@@ -197,6 +205,11 @@ export class SupabaseDb implements Db {
       wooUrl: wooCreds.url,
       wooKey: await decryptSecret(wooCreds.consumer_key),
       wooSecret: await decryptSecret(wooCreds.consumer_secret),
+      shopifyDomain: shopifyCreds.store_domain ? String(shopifyCreds.store_domain) : undefined,
+      shopifyAdminToken: shopifyCreds.access_token ? await decryptSecret(shopifyCreds.access_token) : undefined,
+      shopifyApiVersion: shopifyCreds.api_version ? String(shopifyCreds.api_version) : undefined,
+      shopifyStorefrontToken: shopifyCreds.storefront_access_token ? await decryptSecret(shopifyCreds.storefront_access_token) : undefined,
+      shopifyStorefrontApiVersion: shopifyCreds.storefront_api_version ? String(shopifyCreds.storefront_api_version) : undefined,
       policy:
         Array.isArray(allowedTopics) || refusalMessage
           ? {
@@ -250,7 +263,7 @@ export class SupabaseDb implements Db {
     const bot = await this.getChatbot(chatbotId);
     if (!bot) return null;
     const rows = await this.get<Record<string, unknown>>("tenants", {
-      select: "id,slug,name,industry,currency,plan,billing_enforced,subscription_status,max_assistants,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(provider,credentials,active)",
+      select: "id,slug,name,industry,currency,plan,billing_enforced,subscription_status,max_assistants,zero_data_retention,store_conversations,pii_redaction_enabled,hipaa_mode,store_url,welcome_message,assistant_header_message,tone,brand_colour,business_context,scope,refusal_message,support_email,ticket_prefix,privacy_policy_url,integrations(provider,credentials,active)",
       id: `eq.${bot.tenantId}`,
       limit: "1",
     });
@@ -345,6 +358,10 @@ export class SupabaseDb implements Db {
       body: JSON.stringify(patch),
     });
     if (!res.ok) throw new Error(`DB update conversations: ${res.status} ${await res.text()}`);
+  }
+
+  async recordConsent(tenantId: string, conversationId: string, subject: string | undefined, consentType: string, granted: boolean, source = "widget"): Promise<void> {
+    await this.insert("consent_records", { tenant_id: tenantId, conversation_id: conversationId, subject: subject ?? null, consent_type: consentType, granted, source, evidence: { recordedBy: "chat-runtime" }, recorded_at: new Date().toISOString() });
   }
 
   async getConversation(id: string): Promise<Conversation | null> {

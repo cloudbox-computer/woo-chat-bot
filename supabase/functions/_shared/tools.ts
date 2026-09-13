@@ -7,6 +7,7 @@ import type { Db } from "./db.ts";
 import { env } from "./env.ts";
 import { createIntegrationRouter, toolSupported } from "./integrations/router.ts";
 import { CapabilityUnavailableError } from "./integrations/types.ts";
+import { executeConnectorAction } from "./connectors/runtime.ts";
 
 export interface ToolContext {
   tenant: Tenant;
@@ -16,6 +17,9 @@ export interface ToolContext {
   allowed?: Set<string>;
   /** Customer email for account-gated operations (cart, orders). */
   customerEmail?: string;
+  currentUserMessage?: string;
+  /** Only present when this conversation has a durable database row. */
+  auditConversationId?: string;
 }
 
 export type ToolResult = {
@@ -378,6 +382,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
     return { ok: false, text: "That capability is not connected or enabled for this business." };
   }
   switch (name) {
+    case "run_connector_action": {
+      const actionId = asStr(args.actionId);
+      if (!actionId) return { ok: false, text: "No integration action was selected." };
+      const input = args.input && typeof args.input === "object" && !Array.isArray(args.input) ? args.input as Record<string, unknown> : {};
+      return executeConnectorAction({ tenantId: ctx.tenant.id, actionId, input, confirmed: args.confirmed === true, userMessage: ctx.currentUserMessage ?? "", conversationId: ctx.auditConversationId });
+    }
     case "search_products": {
       const products = await router.requireCatalogue().searchProducts({
         query: asStr(args.query),

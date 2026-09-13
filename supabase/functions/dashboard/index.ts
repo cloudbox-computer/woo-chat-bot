@@ -15,7 +15,7 @@
 //   PUT  /dashboard?action=integrations    upsert WooCommerce creds
 //   GET  /dashboard?action=tickets         list tickets
 //   PUT  /dashboard?action=tickets&id=..   update ticket status/priority
-import { DashboardError, embedScriptFor, resolveDashboardContext, requireDashboardRole, API, authUserFromRequest, slugify } from "../_shared/dashboard.ts";
+import { DashboardError, requestIp, matchesIpRule, embedScriptFor, resolveDashboardContext, requireDashboardRole, API, authUserFromRequest, slugify } from "../_shared/dashboard.ts";
 import { handleOptions, json } from "../_shared/cors.ts";
 import { supabaseConfig, env } from "../_shared/env.ts";
 import { encryptSecret, decryptSecret } from "../_shared/secrets.ts";
@@ -1041,13 +1041,13 @@ async function actionBilling(ctx: Awaited<ReturnType<typeof resolveDashboardCont
 async function actionEnterprise(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>, req: Request) {
   const c = client();
   if (req.method === "GET") {
-    const rows = await getRows(c, "tenants", { select: "plan,billing_enforced,allowed_origins,retention_days,monthly_request_limit,monthly_token_limit,feature_flags,data_region", id: `eq.${ctx.tenantId}`, limit: "1" });
+    const rows = await getRows(c, "tenants", { select: "plan,billing_enforced,allowed_origins,retention_days,monthly_request_limit,monthly_token_limit,feature_flags,data_region,zero_data_retention,store_conversations,pii_redaction_enabled,hipaa_mode,baa_status,mfa_required,ip_allowlist,incident_contact_email,security_contact_email,model_training_opt_out", id: `eq.${ctx.tenantId}`, limit: "1" });
     return json({ settings: rows[0] ?? {} });
   }
   requireDashboardRole(ctx, "owner");
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
   const patch: Record<string, unknown> = {};
-  const billingRows = await getRows(c, "tenants", { select: "billing_enforced", id: `eq.${ctx.tenantId}`, limit: "1" });
+  const billingRows = await getRows(c, "tenants", { select: "billing_enforced,baa_status,mfa_required,hipaa_mode", id: `eq.${ctx.tenantId}`, limit: "1" });
   const billingEnforced = billingRows[0]?.billing_enforced === true;
   if (Array.isArray(body.allowedOrigins)) patch.allowed_origins = body.allowedOrigins.map(String).map((v) => v.trim()).filter(Boolean);
   if (typeof body.retentionDays === "number" && body.retentionDays >= 1 && body.retentionDays <= 3650) patch.retention_days = Math.floor(body.retentionDays);
@@ -1057,9 +1057,87 @@ async function actionEnterprise(ctx: Awaited<ReturnType<typeof resolveDashboardC
   if (!billingEnforced && typeof body.monthlyTokenLimit === "number" && body.monthlyTokenLimit > 0) patch.monthly_token_limit = Math.floor(body.monthlyTokenLimit);
   if (body.featureFlags && typeof body.featureFlags === "object") patch.feature_flags = body.featureFlags;
   if (typeof body.dataRegion === "string") patch.data_region = body.dataRegion.trim().slice(0, 32);
+  if (typeof body.zeroDataRetention === "boolean") {
+    patch.zero_data_retention = body.zeroDataRetention;
+    if (body.zeroDataRetention) patch.store_conversations = false;
+  }
+  if (typeof body.storeConversations === "boolean" && body.zeroDataRetention !== true) patch.store_conversations = body.storeConversations;
+  if (typeof body.piiRedactionEnabled === "boolean") patch.pii_redaction_enabled = body.piiRedactionEnabled;
+  if (typeof body.modelTrainingOptOut === "boolean") patch.model_training_opt_out = body.modelTrainingOptOut;
+  if (Array.isArray(body.ipAllowlist)) {
+    const rules = body.ipAllowlist.map(String).map(v=>v.trim()).filter(Boolean).slice(0,100);
+    const invalid = rules.find((v)=>!(/^([0-9]{1,3}\.){3}[0-9]{1,3}(\/(?:[0-9]|[12][0-9]|3[0-2]))?$/.test(v)||/^[0-9a-f:]+$/i.test(v)));
+    if (invalid) throw new DashboardError(`Invalid IP allowlist entry: ${invalid}`);
+    if (rules.length) {
+      const ip = requestIp(req);
+      if (!ip || !rules.some((rule)=>matchesIpRule(ip,rule))) throw new DashboardError("Your current IP must be included before enabling an IP allowlist",409,"IP_ALLOWLIST_LOCKOUT");
+    }
+    patch.ip_allowlist = rules;
+  }
+  if (typeof body.incidentContactEmail === "string") patch.incident_contact_email = body.incidentContactEmail.trim().toLowerCase() || null;
+  if (typeof body.securityContactEmail === "string") patch.security_contact_email = body.securityContactEmail.trim().toLowerCase() || null;
+  if (body.requestHipaaBaa === true && String(billingRows[0]?.baa_status ?? "none") === "none") patch.baa_status = "requested";
+  if (typeof body.hipaaMode === "boolean") {
+    if (body.hipaaMode && String(billingRows[0]?.baa_status ?? "none") !== "signed") throw new DashboardError("HIPAA mode can only be enabled after the workspace BAA is marked signed", 409);
+    patch.hipaa_mode = body.hipaaMode;
+    if (body.hipaaMode) {
+      patch.zero_data_retention = true;
+      patch.store_conversations = false;
+      patch.pii_redaction_enabled = true;
+      patch.model_training_opt_out = true;
+    }
+  }
+  if (typeof body.mfaRequired === "boolean") {
+    if (body.mfaRequired && ctx.user.aal !== "aal2") throw new DashboardError("Verify MFA on your own account before requiring MFA for the workspace", 409);
+    patch.mfa_required = body.mfaRequired;
+  }
+  // Once HIPAA mode is enabled, generic settings updates must not weaken the
+  // workspace's privacy invariants. The dedicated HIPAA toggle is the only way
+  // to leave this mode.
+  const hipaaWillRemainEnabled = (typeof body.hipaaMode === "boolean" ? body.hipaaMode : billingRows[0]?.hipaa_mode === true);
+  if (hipaaWillRemainEnabled) {
+    patch.zero_data_retention = true;
+    patch.store_conversations = false;
+    patch.pii_redaction_enabled = true;
+    patch.model_training_opt_out = true;
+  }
   if (Object.keys(patch).length) await write(c, "PATCH", `tenants?id=eq.${ctx.tenantId}`, patch);
   await audit(ctx, "enterprise.settings.updated", "tenant", ctx.tenantId, Object.fromEntries(Object.keys(patch).map((k) => [k, true])));
   return json({ ok: true });
+}
+
+async function actionIncidents(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>, req: Request, url: URL) {
+  requireDashboardRole(ctx, "admin");
+  const c = client();
+  if (req.method === "GET") {
+    const rows = await getRows(c, "security_incidents", { select: "id,title,description,severity,status,reported_by,resolved_at,created_at,updated_at", tenant_id: `eq.${ctx.tenantId}`, order: "created_at.desc", limit: "200" });
+    return json({ items: rows });
+  }
+  const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+  if (req.method === "POST") {
+    const title = String(body.title ?? "").trim().slice(0, 160);
+    const description = String(body.description ?? "").trim().slice(0, 10000);
+    const severity = ["info","warning","critical"].includes(String(body.severity)) ? String(body.severity) : "warning";
+    if (!title) throw new DashboardError("Incident title is required");
+    const id = crypto.randomUUID();
+    await write(c, "POST", "security_incidents", { id, tenant_id: ctx.tenantId, title, description, severity, status: "open", reported_by: ctx.user.id });
+    await audit(ctx, "security.incident.created", "security_incident", id, { severity });
+    return json({ ok: true, id }, 201);
+  }
+  if (req.method === "PATCH" || req.method === "PUT") {
+    const id = url.searchParams.get("id")?.trim();
+    if (!id) throw new DashboardError("id is required");
+    const existing = await getRows(c, "security_incidents", { id: `eq.${id}`, tenant_id: `eq.${ctx.tenantId}`, select: "id,status", limit: "1" });
+    if (!existing[0]) throw new DashboardError("Incident not found", 404);
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (typeof body.status === "string") { if (!["open","investigating","contained","resolved"].includes(body.status)) throw new DashboardError("Invalid incident status"); patch.status = body.status; patch.resolved_at = body.status === "resolved" ? new Date().toISOString() : null; }
+    if (typeof body.severity === "string") { if (!["info","warning","critical"].includes(body.severity)) throw new DashboardError("Invalid incident severity"); patch.severity = body.severity; }
+    if (typeof body.description === "string") patch.description = body.description.trim().slice(0,10000);
+    await write(c, "PATCH", `security_incidents?id=eq.${id}&tenant_id=eq.${ctx.tenantId}`, patch);
+    await audit(ctx, "security.incident.updated", "security_incident", id, { status: patch.status ?? undefined, severity: patch.severity ?? undefined });
+    return json({ ok: true });
+  }
+  throw new DashboardError("Method not allowed", 405);
 }
 
 async function actionAudit(ctx: Awaited<ReturnType<typeof resolveDashboardContext>>) {
@@ -1166,23 +1244,42 @@ async function actionGdpr(ctx: Awaited<ReturnType<typeof resolveDashboardContext
   const c = client();
   const id = crypto.randomUUID();
   await write(c, "POST", "data_subject_requests", { id, tenant_id: ctx.tenantId, request_type: requestType, subject_email: email, requested_by: ctx.user.id, status: "processing" });
-  const botIds = await tenantBotIds(ctx);
-  const conversations = botIds.length ? await getRows(c, "conversations", { select: "id,chatbot_id,title,customer_email,email_consent,created_at,updated_at", customer_email: `eq.${email}`, chatbot_id: `in.(${botIds.join(",")})`, limit: "10000" }) : [];
-  const conversationIds = conversations.map((conv) => String(conv.id));
-  const messages = conversationIds.length
-    ? await getRows(c, "messages", { select: "id,conversation_id,role,source,content,products,created_at", conversation_id: `in.(${conversationIds.join(",")})`, order: "created_at.asc", limit: "20000" })
-    : [];
-  const tickets = await getRows(c, "tickets", { select: "id,reference,status,priority,category,subject,description,customer_email,customer_name,created_at,updated_at", tenant_id: `eq.${ctx.tenantId}`, customer_email: `eq.${email}`, order: "created_at.asc", limit: "10000" });
-  if (requestType === "erase") {
-    for (const conv of conversations) {
-      await write(c, "PATCH", `conversations?id=eq.${conv.id}`, { customer_email: null, email_consent: false, title: "Anonymised conversation" });
-      await write(c, "PATCH", `messages?conversation_id=eq.${conv.id}&role=eq.user`, { content: "[erased by data-subject request]" });
+  try {
+    const botIds = await tenantBotIds(ctx);
+    const conversations = botIds.length ? await getRows(c, "conversations", { select: "id,chatbot_id,title,customer_email,email_consent,created_at,updated_at", customer_email: `eq.${email}`, chatbot_id: `in.(${botIds.join(",")})`, limit: "10000" }) : [];
+    const conversationIds = conversations.map((conv) => String(conv.id));
+    const messages = conversationIds.length ? await getRows(c, "messages", { select: "id,conversation_id,role,source,content,products,created_at", conversation_id: `in.(${conversationIds.join(",")})`, order: "created_at.asc", limit: "50000" }) : [];
+    const feedback = conversationIds.length ? await getRows(c, "feedback", { select: "id,conversation_id,rating,comment,created_at", conversation_id: `in.(${conversationIds.join(",")})`, limit: "20000" }) : [];
+    const carts = conversationIds.length ? await getRows(c, "carts", { select: "conversation_id,items,created_at,updated_at", conversation_id: `in.(${conversationIds.join(",")})`, limit: "10000" }) : [];
+    const tickets = await getRows(c, "tickets", { select: "id,reference,conversation_id,status,priority,category,subject,description,customer_email,customer_name,created_at,updated_at", tenant_id: `eq.${ctx.tenantId}`, customer_email: `eq.${email}`, order: "created_at.asc", limit: "10000" });
+    const ticketIds=tickets.map(t=>String(t.id));
+    const ticketMessages=ticketIds.length?await getRows(c,"ticket_messages",{select:"id,ticket_id,sender_type,sender_id,message,created_at",ticket_id:`in.(${ticketIds.join(",")})`,order:"created_at.asc",limit:"50000"}):[];
+    const consents=await getRows(c,"consent_records",{tenant_id:`eq.${ctx.tenantId}`,subject:`eq.${email}`,select:"id,conversation_id,subject,consent_type,granted,source,evidence,recorded_at",limit:"10000"}).catch(()=>[]);
+
+    if (requestType === "erase") {
+      for (const conv of conversations) {
+        await write(c, "PATCH", `conversations?id=eq.${conv.id}`, { customer_email: null, email_consent: false, title: "Anonymised conversation" });
+        await write(c, "PATCH", `messages?conversation_id=eq.${conv.id}`, { content: "[erased by data-subject request]", products: null });
+        await write(c, "PATCH", `feedback?conversation_id=eq.${conv.id}`, { comment: null });
+        await write(c, "DELETE", `carts?conversation_id=eq.${conv.id}`, {});
+        await write(c, "PATCH", `usage_logs?conversation_id=eq.${conv.id}`, { conversation_id: null });
+      }
+      for(const ticket of tickets){
+        await write(c,"PATCH",`ticket_messages?ticket_id=eq.${ticket.id}`,{sender_id:null,message:"[erased by data-subject request]"});
+      }
+      await write(c, "PATCH", `tickets?tenant_id=eq.${ctx.tenantId}&customer_email=eq.${encodeURIComponent(email)}`, { customer_email: `erased+${id}@invalid.local`, customer_name: null, description: "[erased by data-subject request]", subject: "Anonymised support request" });
+      await write(c,"PATCH",`consent_records?tenant_id=eq.${ctx.tenantId}&subject=eq.${encodeURIComponent(email)}`,{subject:null,evidence:{erasedByRequest:id}});
     }
-    await write(c, "PATCH", `tickets?tenant_id=eq.${ctx.tenantId}&customer_email=eq.${encodeURIComponent(email)}`, { customer_email: `erased+${id}@invalid.local`, customer_name: null, description: "[erased by data-subject request]" });
+    const exportData=requestType === "export" ? { exportedAt:new Date().toISOString(), subject:email, conversations, messages, feedback, carts, tickets, ticketMessages, consents } : undefined;
+    const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(email));
+    const subjectHash=[...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,"0")).join("");
+    await write(c, "PATCH", `data_subject_requests?id=eq.${id}`, { status: "completed", completed_at: new Date().toISOString(), ...(requestType==="erase"?{subject_email:`erased:${subjectHash}`}:{}) });
+    await audit(ctx, `gdpr.${requestType}`, "data_subject_request", id, { subject: "redacted" });
+    return json({ ok: true, requestId: id, data: exportData });
+  } catch (error) {
+    await write(c,"PATCH",`data_subject_requests?id=eq.${id}`,{status:"failed",completed_at:new Date().toISOString()}).catch(()=>undefined);
+    throw error;
   }
-  await write(c, "PATCH", `data_subject_requests?id=eq.${id}`, { status: "completed", completed_at: new Date().toISOString() });
-  await audit(ctx, `gdpr.${requestType}`, "data_subject_request", id, { subject: "redacted" });
-  return json({ ok: true, requestId: id, data: requestType === "export" ? { conversations, messages, tickets } : undefined });
 }
 
 
@@ -1249,6 +1346,7 @@ Deno.serve(async (req: Request) => {
     if (action === "audit" && method === "GET") { requirePlanFeature(ctx.tenant, "auditLog"); return await actionAudit(ctx); }
     if (action === "team") return await actionTeam(ctx, req, url);
     if (action === "enterprise") { requirePlanFeature(ctx.tenant, "enterpriseControls"); return await actionEnterprise(ctx, req); }
+    if (action === "incidents") { requirePlanFeature(ctx.tenant, "enterpriseControls"); return await actionIncidents(ctx, req, url); }
     if (action === "billing") return await actionBilling(ctx, req);
     if (action === "operations" && method === "GET") { requirePlanFeature(ctx.tenant, "operations"); return await actionOperations(ctx); }
     if (action === "transcript" && method === "GET") return await actionTranscript(ctx, url);

@@ -37,3 +37,12 @@ This is the release bar for a production deployment. Code changes in this packag
 
 ## Launch decision
 Do not call a live deployment “10/10 verified” until both the automated gate and every environment-specific item above have evidence. The repository can be release-ready while a live environment is still awaiting operational verification.
+
+## Phase 2 connector release
+- Apply `supabase/migrations/20260913_phase2_connectors_oauth.sql` after the Phase 1 data-source/compliance migration.
+- Deploy the `connector-oauth` Edge Function with this release.
+- Set `CONNECTOR_OAUTH_CALLBACK_URL` and register the same exact callback URL with each enabled OAuth provider.
+- Configure provider OAuth client IDs/secrets only for providers you intend to expose.
+- Verify `maintenance` runs on schedule so expired OAuth states are removed.
+- Connect and test each enabled provider in a non-production workspace before allowing customer use.
+- Complete any provider-side application review, Meta permissions, Twilio sender compliance, or marketplace approval required for production traffic.

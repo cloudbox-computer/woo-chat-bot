@@ -15,6 +15,8 @@ import { createIntegrationRouter, toolSupported } from "./integrations/router.ts
 import type { ChatRequest, ChatResponse, Conversation, Product, Tenant, TenantPolicy, ToolPermission } from "./types.ts";
 import { DEFAULT_CHATBOT_PERMISSIONS } from "./types.ts";
 import { redactForStorage } from "./privacy.ts";
+import { connectorActionTool, listRuntimeActions } from "./connectors/runtime.ts";
+import { entitlementsForTenant } from "./entitlements.ts";
 
 export const MAX_TOOL_TURNS = 6;
 
@@ -173,16 +175,32 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // a connected/provider-backed capability allow it. The model never sees the
   // provider name and therefore never needs to know where the data lives.
   const allowed = new Set([...permissionAllowed].filter((name) => toolSupported(integrationRouter, name)));
-  const tools = TOOL_SPECS.filter((t) => allowed.has(t.function.name));
+  // Zero-retention/HIPAA workspaces fail closed for tools that require ZoChat
+  // to persist customer session/support data. External read-only lookups remain available.
+  if (tenant.zeroDataRetention || tenant.hipaaMode) {
+    ["add_to_cart", "view_cart", "create_checkout", "create_ticket", "check_ticket_status"].forEach((name) => allowed.delete(name));
+  }
+  const botPermissions = chatbot.permissions ?? DEFAULT_CHATBOT_PERMISSIONS;
+  const canReadActions = botPermissions.includes("read") || botPermissions.includes("admin") || botPermissions.includes("sensitive");
+  const canWriteActions = botPermissions.includes("sensitive") || botPermissions.includes("admin");
+  // HIPAA mode disables arbitrary external actions unless a future connector is
+  // explicitly BAA-vetted. This prevents accidental PHI disclosure.
+  const liveIntegrationAccess = entitlementsForTenant(tenant).liveIntegrations;
+  const runtimeActions = liveIntegrationAccess && !tenant.hipaaMode && canReadActions ? await listRuntimeActions(tenant.id, canWriteActions) : [];
+  const runtimeActionTool = connectorActionTool(runtimeActions);
+  if (runtimeActionTool) allowed.add("run_connector_action");
+  const tools = [...TOOL_SPECS.filter((t) => allowed.has(t.function.name)), ...(runtimeActionTool ? [runtimeActionTool] : [])];
   if (tools.length === 0) {
     throw new AgentError("This chatbot has no tools enabled", 500);
   }
 
-  // Conversation (existing or new)
-  let conversationId = req.conversationId;
+  // Conversation (existing or new). In Zero Data Retention / no-storage mode
+  // the id is request continuity metadata only; no transcript/session row is stored.
+  const persistConversation = tenant.storeConversations !== false && !tenant.zeroDataRetention;
+  let conversationId = persistConversation ? req.conversationId : undefined;
   let fresh = false;
   let existing: Conversation | null = null;
-  if (conversationId) {
+  if (conversationId && persistConversation) {
     existing = await db.getConversation(conversationId);
     if (existing && existing.chatbotId !== chatbotId) {
       throw new AgentError("Conversation does not belong to this chatbot", 400);
@@ -192,15 +210,17 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   if (!conversationId) {
     conversationId = crypto.randomUUID();
     fresh = true;
-    await db.createConversation({
-      id: conversationId,
-      chatbotId,
-      customerEmail: req.customerEmail,
-      emailConsent: req.emailConsent === true ? true : undefined,
-      title: deriveTitle(req.message),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    if (persistConversation) {
+      await db.createConversation({
+        id: conversationId,
+        chatbotId,
+        customerEmail: req.customerEmail,
+        emailConsent: req.emailConsent === true ? true : undefined,
+        title: deriveTitle(req.message),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
   }
 
   // Persist a customer email when the request provides one or the customer
@@ -209,13 +229,16 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // verified identity for account lookups. Never fatal.
   const emailFromMessage = extractEmail(req.message);
   const emailToPersist = (req.customerEmail ?? "").trim() || emailFromMessage;
-  if (emailToPersist) {
+  if (emailToPersist && persistConversation) {
     try {
       // GDPR: record whether the customer EXPLICITLY consented (widget consent
       // box). If they simply volunteered the email in chat, consent stays
       // false — the email is stored on the lawful basis of providing the
       // support/order service they asked for.
       await db.setConversationEmail(conversationId, emailToPersist, req.emailConsent === true);
+      if (req.emailConsent === true) {
+        await db.recordConsent(tenant.id, conversationId, emailToPersist, "support_email_storage", true, "widget");
+      }
     } catch {
       // ignore — email capture must never break the chat
     }
@@ -257,7 +280,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // Flattened transcript: stored history first, then the new message last so
   // the model never loses it after a tool round-trip.
   const transcript: TranscriptEntry[] = [];
-  const stored = fresh ? [] : await db.getMessages(conversationId);
+  const stored = !persistConversation || fresh ? [] : await db.getMessages(conversationId);
   for (const m of stored.slice(-10)) {
     transcript.push({ role: m.role, content: m.content });
   }
@@ -297,7 +320,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
         break;
       }
 
-      const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail };
+      const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail, currentUserMessage: req.message, auditConversationId: persistConversation ? conversationId : undefined };
       for (const call of result.toolCalls) {
         const toolResult = await executeTool(call.name, call.arguments, ctx);
         transcript.push({
@@ -339,7 +362,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
       if (forced) {
         deterministicRouted = true;
         toolTurns++;
-        const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail };
+        const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail, currentUserMessage: req.message, auditConversationId: persistConversation ? conversationId : undefined };
         const toolResult = await executeTool(forced.name, forced.arguments, ctx);
         transcript.push({
           role: "assistant",
@@ -379,22 +402,24 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   });
   const finalReply = output.allowed ? reply : refusalReply(policy);
 
-  // Persist
-  await db.appendMessage({
-    id: crypto.randomUUID(),
-    conversationId,
-    role: "user",
-    content: redactForStorage(req.message),
-    createdAt: new Date().toISOString(),
-  });
-  await db.appendMessage({
-    id: crypto.randomUUID(),
-    conversationId,
-    role: "assistant",
-    content: finalReply,
-    products: products.length ? dedupeProducts(products).slice(0, 6) : undefined,
-    createdAt: new Date().toISOString(),
-  });
+  // Persist only when the workspace allows conversation retention.
+  if (persistConversation) {
+    await db.appendMessage({
+      id: crypto.randomUUID(),
+      conversationId,
+      role: "user",
+      content: tenant.piiRedactionEnabled === false ? req.message : redactForStorage(req.message),
+      createdAt: new Date().toISOString(),
+    });
+    await db.appendMessage({
+      id: crypto.randomUUID(),
+      conversationId,
+      role: "assistant",
+      content: tenant.piiRedactionEnabled === false ? finalReply : redactForStorage(finalReply),
+      products: products.length ? dedupeProducts(products).slice(0, 6) : undefined,
+      createdAt: new Date().toISOString(),
+    });
+  }
 
   return {
     reply: finalReply,

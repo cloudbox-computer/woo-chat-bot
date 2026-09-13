@@ -53,6 +53,11 @@ jobs:
           deno check supabase/functions/widget-config/index.ts
           deno check supabase/functions/stripe-webhook/index.ts
           deno check supabase/functions/onboarding/index.ts
+          deno check supabase/functions/data-sources/index.ts
+          deno check supabase/functions/connector-oauth/index.ts
+          deno check supabase/functions/connector-oauth-start/index.ts
+          deno check supabase/functions/worker/index.ts
+          deno check supabase/functions/maintenance/index.ts
 
       - name: Deterministic entitlement tests
         run: deno run -A tests/plan-entitlements.ts

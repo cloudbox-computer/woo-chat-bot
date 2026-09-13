@@ -50,6 +50,19 @@ check('HIPAA/ZDR controls wired', dashboard.includes('hipaa_mode') && text('supa
 check('MFA gate present', fs.existsSync(path.join(root,'dashboard/src/components/MfaGate.tsx')) && text('supabase/functions/_shared/dashboard.ts').includes('MFA_REQUIRED'));
 check('Shopify GraphQL adapter present', fs.existsSync(path.join(root,'supabase/functions/_shared/integrations/shopify.ts')) && text('supabase/functions/_shared/integrations/shopify.ts').includes('/graphql.json'));
 
+const connectorRegistry=text('supabase/functions/_shared/connectors/registry.ts');
+const connectorRuntime=text('supabase/functions/_shared/connectors/runtime.ts');
+const connectorOauth=text('supabase/functions/_shared/connectors/oauth.ts');
+const dataSources=text('supabase/functions/_shared/sources/sync.ts');
+for(const provider of ['salesforce','intercom','freshdesk','helpscout','gorgias','zoho_desk','messenger','instagram','twilio','wordpress']) check(`phase2 connector ${provider}`, connectorRegistry.includes(`id:"${provider}"`));
+check('Phase 2 OAuth one-time state broker', schema.includes('connector_oauth_states') && connectorOauth.includes('consumeState') && connectorOauth.includes('code_challenge'));
+check('OAuth callback is provider-safe', text('supabase/config.toml').includes('[functions.connector-oauth]\nverify_jwt = false') && text('supabase/config.toml').includes('[functions.connector-oauth-start]\nverify_jwt = true') && !text('supabase/functions/connector-oauth/index.ts').includes('resolveDashboardContext') && text('supabase/functions/connector-oauth-start/index.ts').includes('resolveDashboardContext'));
+check('connector token refresh is persisted', connectorRuntime.includes('persistRefreshedCredentials') && connectorRuntime.includes('r.status===401'));
+check('ZDR connector audit avoids transient conversation FK', tools.includes('auditConversationId') && text('supabase/functions/_shared/agent.ts').includes('persistConversation ? conversationId : undefined'));
+check('WordPress is a syncable data source', dataSources.includes('fromWordPress') && text('dashboard/src/pages/Knowledge.tsx').includes('wordpress'));
+check('connector action request/response limits', connectorRuntime.includes('256 KB safety limit') && connectorRuntime.includes('1 MB safety limit'));
+check('integration preset UI present', text('dashboard/src/pages/Integrations.tsx').includes('Ready-made actions') && text('dashboard/src/pages/Integrations.tsx').includes('Connect securely'));
+
 
 // Local relative TS imports must resolve to a file.
 const sourceRoots = ['dashboard/src','widget/src','supabase/functions','scripts','tests'];

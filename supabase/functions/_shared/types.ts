@@ -42,6 +42,11 @@ export interface Tenant {
   billingEnforced?: boolean;
   subscriptionStatus?: string;
   maxAssistants?: number;
+  /** Compliance/privacy persistence controls. */
+  zeroDataRetention?: boolean;
+  storeConversations?: boolean;
+  piiRedactionEnabled?: boolean;
+  hipaaMode?: boolean;
   welcomeMessage: string;
   assistantHeaderMessage?: string;
   tone?: string;
@@ -49,6 +54,12 @@ export interface Tenant {
   wooUrl?: string;
   wooKey?: string;
   wooSecret?: string;
+  /** Shopify GraphQL Admin / Storefront credentials, loaded server-side from integrations. */
+  shopifyDomain?: string;
+  shopifyAdminToken?: string;
+  shopifyApiVersion?: string;
+  shopifyStorefrontToken?: string;
+  shopifyStorefrontApiVersion?: string;
   businessContext?: string; // injected into the system prompt
   /** Tenant Policy Engine config — the strict-scope boundary for this tenant. */
   policy?: TenantPolicy;
