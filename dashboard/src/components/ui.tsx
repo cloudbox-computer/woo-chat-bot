@@ -75,9 +75,9 @@ export function Badge({ tone, children }: { tone: string; children: React.ReactN
 }
 
 export function Spinner() {
-  return <span className="muted">Loading…</span>;
+  return <div className="loading-state" role="status"><span className="loading-spinner" aria-hidden="true" />Loading…</div>;
 }
 
 export function ErrorBox({ message }: { message: string }) {
-  return <div className="card" style={{ color: "var(--red)" }}>{message}</div>;
+  return <div className="error-state" role="alert"><span className="error-state-icon" aria-hidden="true">!</span><div><strong>Something went wrong</strong><p>{message}</p></div></div>;
 }

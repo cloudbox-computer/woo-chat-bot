@@ -43,8 +43,8 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
 
       {config?.tenant && (
         <Card className="overview-setup-card">
-          <div style={{display:"flex",justifyContent:"space-between",gap:16,alignItems:"flex-start",flexWrap:"wrap"}}> 
-            <div><h3 style={{margin:"0 0 6px"}}>Finish setup</h3><p className="muted" style={{margin:0}}>Your workspace is ready. Complete these steps to start serving customers.</p></div>
+          <div className="overview-setup-head">
+            <div><h3>Finish setup</h3><p className="muted">Your workspace is ready. Complete these steps to start serving customers.</p></div>
             {billing && <Badge tone={billing.status === "active" || billing.status === "trialing" ? "resolved" : "in_progress"}>{billing.status === "trialing" ? "14-day trial active" : billing.status === "active" ? `${billing.plan} plan active` : "Billing needs attention"}</Badge>}
           </div>
           <div className="setup-grid">
@@ -58,7 +58,7 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
       )}
 
       {stats && (
-        <div className="grid cols-4 overview-stats" style={{ marginBottom: 24 }}>
+        <div className="grid cols-4 overview-stats">
           {stats.map((s) => (
             <Card key={s.label}>
               <div className="stat">
@@ -73,7 +73,7 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
       )}
 
       <Card>
-        <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>Recent conversations</h3>
+        <div className="section-head compact"><div><h2>Recent conversations</h2><p>Latest customer conversations across your widget.</p></div></div>
         {data && data.recentConversations.length === 0 && (
           <div className="empty">No conversations yet. Install the widget and your customers will appear here.</div>
         )}
@@ -88,14 +88,13 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
             </thead>
             <tbody>
               {data.recentConversations.map((c) => (
-                <tr key={c.id} style={{cursor:"pointer"}} onClick={() => getTranscript(tenantId,c.id).then(setTranscript)}>
+                <tr key={c.id} className="clickable-row" onClick={() => getTranscript(tenantId,c.id).then(setTranscript)}>
                   <td>{c.title}</td>
                   <td>
                     {c.customerEmail ?? <span className="muted">—</span>}
                     {c.emailConsent ? (
                       <span
-                        className="muted"
-                        style={{ display: "block", fontSize: 11 }}
+                        className="consent-note"
                         title="Customer consented to store their email (GDPR)"
                       >
                         consent ✓
@@ -109,7 +108,7 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
           </table>
         )}
         {data && data.openTickets > 0 && (
-          <div style={{ marginTop: 12 }}>
+          <div className="card-footer-note">
             <Badge tone="in_progress">{data.openTickets} open ticket(s) need attention</Badge>
           </div>
         )}
@@ -117,17 +116,17 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
 
       {transcript && (
         <div className="modal-overlay" onClick={() => setTranscript(null)}>
-          <div className="modal" style={{maxWidth:760,maxHeight:"80vh",overflow:"auto"}} onClick={(e)=>e.stopPropagation()}>
-            <div style={{display:"flex",justifyContent:"space-between",gap:12}}><h2>Conversation transcript</h2><button className="btn ghost" onClick={()=>setTranscript(null)}>Close</button></div>
-            <div className="muted" style={{marginBottom:12}}>{String(transcript.conversation.title ?? "Conversation")} · mode: <b>{String(transcript.conversation.control_mode ?? "ai")}</b></div>
-            {config?.entitlements.humanTakeover ? <div style={{display:"flex",gap:8,marginBottom:12}}>
+          <div className="modal transcript-modal" onClick={(e)=>e.stopPropagation()}>
+            <div className="modal-head"><div><h2>Conversation transcript</h2><p>Review the conversation or take over from the AI.</p></div><button className="icon-button" aria-label="Close transcript" onClick={()=>setTranscript(null)}>×</button></div>
+            <div className="transcript-meta">{String(transcript.conversation.title ?? "Conversation")} · mode: <b>{String(transcript.conversation.control_mode ?? "ai")}</b></div>
+            {config?.entitlements.humanTakeover ? <div className="transcript-actions">
               <button className="btn secondary" onClick={async()=>{await setConversationMode(tenantId,String(transcript.conversation.id),"human");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}>Take over</button>
               <button className="btn ghost" onClick={async()=>{await setConversationMode(tenantId,String(transcript.conversation.id),"ai");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}>Return to AI</button>
-            </div> : <div className="muted" style={{marginBottom:12}}>Human takeover is available on Growth and Scale.</div>}
-            {transcript.messages.map((m)=><div key={String(m.id)} style={{padding:"10px 12px",border:"1px solid var(--border)",borderRadius:10,marginBottom:8}}>
-              <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase"}}>{String(m.source ?? m.role)}</div><div style={{whiteSpace:"pre-wrap"}}>{String(m.content)}</div><div className="muted" style={{fontSize:11,marginTop:6}}>{new Date(String(m.created_at)).toLocaleString()}</div>
+            </div> : <div className="info-banner">Human takeover is available on Growth and Scale.</div>}
+            {transcript.messages.map((m)=><div key={String(m.id)} className={`transcript-message ${String(m.source ?? m.role)}`}>
+              <div className="transcript-message-role">{String(m.source ?? m.role)}</div><div className="transcript-message-body">{String(m.content)}</div><div className="transcript-message-time">{new Date(String(m.created_at)).toLocaleString()}</div>
             </div>)}
-            {config?.entitlements.humanTakeover && String(transcript.conversation.control_mode ?? "ai") === "human" && <div style={{display:"flex",gap:8,marginTop:12}}><input className="input" placeholder="Reply as agent…" value={agentText} onChange={e=>setAgentText(e.target.value)} onKeyDown={async e=>{if(e.key==="Enter"&&agentText.trim()){await sendAgentMessage(tenantId,String(transcript.conversation.id),agentText.trim());setAgentText("");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}}/><button className="btn primary" onClick={async()=>{if(!agentText.trim())return;await sendAgentMessage(tenantId,String(transcript.conversation.id),agentText.trim());setAgentText("");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}>Send</button></div>}
+            {config?.entitlements.humanTakeover && String(transcript.conversation.control_mode ?? "ai") === "human" && <div className="transcript-reply"><input className="input" placeholder="Reply as agent…" value={agentText} onChange={e=>setAgentText(e.target.value)} onKeyDown={async e=>{if(e.key==="Enter"&&agentText.trim()){await sendAgentMessage(tenantId,String(transcript.conversation.id),agentText.trim());setAgentText("");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}}/><button className="btn primary" onClick={async()=>{if(!agentText.trim())return;await sendAgentMessage(tenantId,String(transcript.conversation.id),agentText.trim());setAgentText("");setTranscript(await getTranscript(tenantId,String(transcript.conversation.id)))}}>Send</button></div>}
           </div>
         </div>
       )}

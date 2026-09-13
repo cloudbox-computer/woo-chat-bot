@@ -63,7 +63,7 @@ export default function TicketsPage({ tenantId, selectedTicketId = null }: { ten
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+      <div className="filter-bar">
         {["all", "open", "resolved", "closed"].map((f) => (
           <button key={f} className={`btn ${filter === f ? "" : "secondary"} sm`} onClick={() => setFilter(f)}>
             {f === "all" ? "All" : f}
@@ -74,7 +74,7 @@ export default function TicketsPage({ tenantId, selectedTicketId = null }: { ten
       {items.length === 0 && <div className="empty">No tickets yet. When a customer asks for help, a ticket appears here.</div>}
 
       {filtered.length > 0 && (
-        <Card style={{ padding: 0, overflow: "hidden" }}>
+        <Card className="table-card flush">
           <table>
             <thead>
               <tr>
@@ -93,14 +93,14 @@ export default function TicketsPage({ tenantId, selectedTicketId = null }: { ten
                   id={`ticket-${t.id}`}
                   style={selectedTicketId === t.id ? { outline: "2px solid #9c7b4f", outlineOffset: -2, background: "rgba(156,123,79,0.08)" } : undefined}
                 >
-                  <td style={{ whiteSpace: "nowrap", fontWeight: 600 }}>{t.reference}</td>
+                  <td className="ticket-reference">{t.reference}</td>
                   <td>
                     <div>{t.subject}</div>
-                    <div className="muted" style={{ fontSize: 12 }}>{t.category}</div>
+                    <div className="table-subtext">{t.category}</div>
                   </td>
                   <td>
                     <div>{t.customer_name}</div>
-                    <div className="muted" style={{ fontSize: 12 }}>{t.customer_email}</div>
+                    <div className="table-subtext">{t.customer_email}</div>
                   </td>
                   <td><Badge tone={t.priority}>{t.priority}</Badge></td>
                   <td><Badge tone={statusTone(t.status)}>{t.status}</Badge></td>
@@ -109,7 +109,7 @@ export default function TicketsPage({ tenantId, selectedTicketId = null }: { ten
                       value={t.status}
                       disabled={busy}
                       onChange={(e) => setStatus(t.id, e.target.value)}
-                      style={{ width: "auto" }}
+                      className="table-select"
                     >
                       {STATUSES.map((s) => (
                         <option key={s} value={s}>{s}</option>

@@ -75,8 +75,8 @@ export default function SettingsPage({
         </div>
       </div>
 
-      <Card>
-        <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>Support & tickets</h3>
+      <Card className="section-card">
+        <div className="section-head"><div><h2>Support & tickets</h2><p>Configure how customer support requests are organised.</p></div></div>
         <Field label="Support email" hint="Tickets created by customers are emailed here.">
           <input type="email" value={supportEmail} onChange={(e) => setSupportEmail(e.target.value)} placeholder="support@yourstore.com" />
         </Field>
@@ -95,21 +95,21 @@ export default function SettingsPage({
           <input type="text" value={categories} onChange={(e) => setCategories(e.target.value)} placeholder="damaged, refund, order query" />
         </Field>
         <Field label="Brand colour">
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div className="brand-colour-row">
             <input
               type="color"
               value={/^#[0-9a-fA-F]{6}$/.test(brandColour) ? brandColour : "#7c3aed"}
               onChange={(e) => setBrandColour(e.target.value)}
             />
-            <input type="text" value={brandColour} onChange={(e) => setBrandColour(e.target.value)} style={{ width: 120 }} />
+            <input className="colour-value-input" type="text" value={brandColour} onChange={(e) => setBrandColour(e.target.value)} />
           </div>
         </Field>
         <button className="btn" disabled={busy} onClick={save}>Save changes</button>
       </Card>
 
-      <Card style={{ marginTop: 16 }}>
-        <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>Onboarding</h3>
-        <p className="muted" style={{ margin: 0 }}>
+      <Card className="section-card settings-onboarding-card">
+        <div className="section-head compact"><div><h2>Onboarding</h2><p>Current workspace onboarding state.</p></div></div>
+        <p className="muted settings-status-row">
           Onboarding status:{" "}
           <Badge tone={data.tenant.onboardingComplete ? "on" : "off"}>
             {data.tenant.onboardingComplete ? "Complete" : "Incomplete"}
