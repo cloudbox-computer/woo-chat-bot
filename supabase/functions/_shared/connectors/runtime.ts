@@ -1,4 +1,5 @@
 import type { ToolSpec } from "../ai.ts";
+import type { WidgetInteraction } from "../types.ts";
 import { supabaseConfig } from "../env.ts";
 import { decryptedCredentials, encryptCredentials } from "./registry.ts";
 
@@ -100,12 +101,12 @@ function calendlyCustomerText(path:string,raw:string):string|null{
     if(path==="/event_types"&&Array.isArray(data?.collection)){
       const items=data.collection.filter((x:any)=>x?.active!==false).slice(0,12);
       if(!items.length)return "There are no active appointment types available to book right now.";
-      return `Available appointment types:\n${items.map((x:any)=>`- ${String(x.name??"Meeting")}${x.duration?` (${x.duration} minutes)`:""}${x.scheduling_url?` — ${x.scheduling_url}`:""}`).join("\n")}`;
+      return `Available appointment types:\n${items.map((x:any)=>`- ${String(x.name??"Meeting")}${x.duration?` (${x.duration} minutes)`:""}`).join("\n")}`;
     }
     if(path==="/event_type_available_times"&&Array.isArray(data?.collection)){
       const items=data.collection.filter((x:any)=>x?.status==="available").slice(0,10);
       if(!items.length)return "I couldn't find any available appointment times in that period.";
-      return `Available appointment times:\n${items.map((x:any)=>`- ${String(x.start_time??"")}${x.scheduling_url?` — ${x.scheduling_url}`:""}`).join("\n")}`;
+      return `Available appointment times:\n${items.map((x:any)=>`- ${String(x.start_time??"")}`).join("\n")}`;
     }
     if(path==="/invitees"&&data?.resource){const r=data.resource;return [`Your appointment is booked${r.name?` for ${r.name}`:""}.`,r.status?`Status: ${r.status}`:"",r.reschedule_url?`Reschedule: ${r.reschedule_url}`:"",r.cancel_url?`Cancel: ${r.cancel_url}`:""].filter(Boolean).join("\n")}
   }catch{/* fall back to generic mapping */}
@@ -191,7 +192,7 @@ function requestInitFor(action:RuntimeConnectorAction,ep:{headers:Record<string,
 }
 
 
-export async function executeConnectorAction(opts:{tenantId:string;actionId:string;input:Record<string,unknown>;confirmed:boolean;userMessage:string;conversationId?:string}):Promise<{ok:boolean;text:string}>{
+export async function executeConnectorAction(opts:{tenantId:string;actionId:string;input:Record<string,unknown>;confirmed:boolean;userMessage:string;conversationId?:string}):Promise<{ok:boolean;text:string;interaction?:WidgetInteraction}>{
   const rows=await getRows("connector_actions",{id:`eq.${opts.actionId}`,tenant_id:`eq.${opts.tenantId}`,active:"eq.true",select:"*",limit:"1"});const action=rows[0] as unknown as RuntimeConnectorAction|undefined;if(!action)return{ok:false,text:"That integration action is not available."};
   const started=Date.now();
   console.log("connector:action:start", { tenantId: opts.tenantId, conversationId: opts.conversationId, actionId: action.id, provider: action.provider, actionName: action.name, method: action.method });
@@ -200,8 +201,15 @@ export async function executeConnectorAction(opts:{tenantId:string;actionId:stri
     console.log("connector:action:done", { tenantId: opts.tenantId, conversationId: opts.conversationId, actionId: action.id, provider: action.provider, actionName: action.name, method: action.method, ok, statusCode: statusCode??null, durationMs, errorCode: errorCode??null });
     return insertRun({tenant_id:opts.tenantId,action_id:action.id,conversation_id:opts.conversationId||null,provider:action.provider,action_name:action.name,method:action.method,ok,status_code:statusCode??null,duration_ms:durationMs,error_code:errorCode??null,metadata:{capability:action.capability,confirmationRequired:action.require_confirmation,confirmed:opts.confirmed===true}});
   };
-  if(action.method!=="GET"&&action.require_confirmation&&(!opts.confirmed||!isExplicitConfirmation(opts.userMessage))){await log(false,undefined,"CONFIRMATION_REQUIRED");return{ok:false,text:`Confirmation is required before I can run “${action.name}”. Please ask the customer to explicitly confirm, then try again.`}}
-  const validationError=validateInput(action.request_schema??{},opts.input??{});if(validationError){await log(false,undefined,"INVALID_INPUT");return{ok:false,text:validationError}}
+  const validationError=validateInput(action.request_schema??{},opts.input??{});
+  if(validationError){
+    await log(false,undefined,"INVALID_INPUT");
+    return{ok:false,text:`I need a few details before I can ${action.name.toLowerCase()}.`,interaction:{type:"action_form",title:action.name,description:action.description||"Please complete the details below.",actionId:action.id,actionName:action.name,schema:action.request_schema??{},values:opts.input??{},submitLabel:action.require_confirmation?"Review details":"Continue",requireConfirmation:action.require_confirmation}};
+  }
+  if(action.method!=="GET"&&action.require_confirmation&&(!opts.confirmed||!isExplicitConfirmation(opts.userMessage))){
+    await log(false,undefined,"CONFIRMATION_REQUIRED");
+    return{ok:false,text:"Please review the details below and confirm when you're ready.",interaction:{type:"action_confirmation",title:`Confirm ${action.name}`,description:"Nothing will be sent until you confirm.",actionId:action.id,actionName:action.name,input:opts.input??{},confirmLabel:"Confirm"}};
+  }
   const intRows=await getRows("integrations",{tenant_id:`eq.${opts.tenantId}`,provider:`eq.${action.provider}`,active:"eq.true",select:"id,credentials",limit:"1"});const integration=intRows[0];if(!integration){await log(false,undefined,"INTEGRATION_INACTIVE");return{ok:false,text:`The ${action.provider} connection is not active.`}}
   const stored=(integration.credentials??{}) as Record<string,unknown>;let creds=await decryptedCredentials(action.provider,stored);const {path,rest}=fillPath(action.path_template,opts.input??{},creds);
   // Calendly's event-types endpoint deliberately requires an explicit user or
@@ -222,7 +230,42 @@ export async function executeConnectorAction(opts:{tenantId:string;actionId:stri
   try{
     let r=await perform(creds);
     if(r.status===401||r.status===403){const refreshed=await refreshOAuthIfAvailable(action.provider,creds);if(JSON.stringify(refreshed)!==JSON.stringify(creds)){creds=refreshed;await persistRefreshedCredentials(String(integration.id),action.provider,creds,stored);r=await perform(creds)}}
-    const raw=await readResponseLimited(r);if(!r.ok){await log(false,r.status,"UPSTREAM_ERROR");return{ok:false,text:`${action.name} failed (${r.status}). ${safeResultText(raw).slice(0,4000)}`}}const customerText=action.provider==="calendly"?calendlyCustomerText(path,raw):null;const mapped=mappedResponse(raw,action.response_mapping??{});await log(true,r.status);return{ok:true,text:customerText??`${action.name} succeeded.\n${safeResultText(mapped)||"No response body."}`}
+    const raw=await readResponseLimited(r);
+    if(!r.ok){await log(false,r.status,"UPSTREAM_ERROR");return{ok:false,text:`${action.name} failed (${r.status}). ${safeResultText(raw).slice(0,4000)}`}}
+    if(action.provider==="calendly"){
+      try{
+        const data=JSON.parse(raw) as any;
+        if(path==="/event_types"&&Array.isArray(data?.collection)){
+          const items=data.collection.filter((x:any)=>x?.active!==false).slice(0,12).map((x:any)=>({uri:String(x.uri??""),name:String(x.name??"Meeting"),duration:typeof x.duration==="number"?x.duration:undefined})).filter((x:any)=>x.uri);
+          if(!items.length){await log(true,r.status);return{ok:true,text:"There are no active appointment types available to book right now."}}
+          if(items.length===1){
+            const availableRows=await getRows("connector_actions",{tenant_id:`eq.${opts.tenantId}`,provider:"eq.calendly",name:"eq.Check Calendly availability",active:"eq.true",select:"id",limit:"1"});
+            const availableId=String(availableRows[0]?.id??"");
+            if(availableId){
+              const start=new Date(Date.now()+5*60*1000);
+              const end=new Date(start.getTime()+14*24*60*60*1000);
+              const nested=await executeConnectorAction({tenantId:opts.tenantId,actionId:availableId,input:{event_type:items[0].uri,start_time:start.toISOString(),end_time:end.toISOString()},confirmed:false,userMessage:opts.userMessage,conversationId:opts.conversationId});
+              if(nested.interaction?.type==="appointment_picker") nested.interaction.eventType={...items[0]};
+              await log(true,r.status);
+              return nested.ok?nested:{...nested,text:nested.text||"I couldn't load the available appointment times just now."};
+            }
+          }
+          await log(true,r.status);
+          return{ok:true,text:"Choose the type of appointment you'd like to book.",interaction:{type:"appointment_type_picker",title:"Choose an appointment",description:"Select a meeting type to see live availability.",eventTypes:items}};
+        }
+        if(path==="/event_type_available_times"&&Array.isArray(data?.collection)){
+          const slots=data.collection.filter((x:any)=>x?.status==="available"&&x?.start_time).slice(0,120).map((x:any)=>({startTime:String(x.start_time)}));
+          await log(true,r.status);
+          return{ok:true,text:slots.length?"Choose a date and time that suits you.":"I couldn't find any available appointment times in the next two weeks.",interaction:slots.length?{type:"appointment_picker",title:"Choose a date & time",description:"Times shown are live availability.",eventType:{uri:String(opts.input.event_type??""),name:"Appointment"},slots}:undefined};
+        }
+        if(path==="/invitees"&&data?.resource){
+          const rr=data.resource;
+          await log(true,r.status);
+          return{ok:true,text:"Your appointment is booked.",interaction:{type:"booking_confirmation",title:"Appointment confirmed",startTime:String(opts.input.start_time??""),eventName:typeof opts.input.event_name==="string"?String(opts.input.event_name):undefined,inviteeName:typeof (opts.input.invitee as any)?.name==="string"?String((opts.input.invitee as any).name):undefined}};
+        }
+      }catch{/* fall through to mapped response */}
+    }
+    const customerText=action.provider==="calendly"?calendlyCustomerText(path,raw):null;const mapped=mappedResponse(raw,action.response_mapping??{});await log(true,r.status);return{ok:true,text:customerText??`${action.name} succeeded.\n${safeResultText(mapped)||"No response body."}`}
 
   }catch(e){const code=e instanceof DOMException&&e.name==="AbortError"?"TIMEOUT":"REQUEST_ERROR";await log(false,undefined,code);return{ok:false,text:`${action.name} failed: ${e instanceof Error?e.message:"request error"}`}}
 }

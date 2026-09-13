@@ -22,6 +22,18 @@ export interface WidgetConfig {
   privacyUrl?: string;
 }
 
+type WidgetInteraction =
+  | { type: "appointment_type_picker"; title: string; description?: string; eventTypes: Array<{ uri: string; name: string; duration?: number }> }
+  | { type: "appointment_picker"; title: string; description?: string; eventType: { uri: string; name: string; duration?: number }; slots: Array<{ startTime: string }> }
+  | { type: "action_form"; title: string; description?: string; actionId: string; actionName: string; schema: Record<string, unknown>; values?: Record<string, unknown>; submitLabel?: string; requireConfirmation?: boolean }
+  | { type: "action_confirmation"; title: string; description?: string; actionId: string; actionName: string; input: Record<string, unknown>; confirmLabel?: string }
+  | { type: "booking_confirmation"; title: string; startTime?: string; eventName?: string; inviteeName?: string };
+
+type WidgetAction = {
+  type: "calendly_event_type_selected" | "calendly_book" | "connector_action_submit" | "connector_action_confirm";
+  payload: Record<string, unknown>;
+};
+
 interface ChatApiRequest {
   chatbotId: string;
   message: string;
@@ -29,6 +41,7 @@ interface ChatApiRequest {
   conversationToken?: string;
   customerEmail?: string;
   emailConsent?: boolean;
+  widgetAction?: WidgetAction;
 }
 
 interface ChatApiResponse {
@@ -36,6 +49,7 @@ interface ChatApiResponse {
   conversationId: string;
   conversationToken?: string;
   products?: Product[];
+  interaction?: WidgetInteraction;
   requiresEmail?: boolean;
 }
 
@@ -54,6 +68,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   products?: Product[];
+  interaction?: WidgetInteraction;
   error?: boolean;
 }
 
@@ -133,6 +148,79 @@ function isProductListing(content: string, products?: Product[]): boolean {
     if (p.name && lower.includes(p.name.toLowerCase())) matched++;
   }
   return matched >= 2 && matched >= Math.ceil(products.length / 2);
+}
+
+
+function formatAppointmentDate(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short" }).format(d);
+}
+function formatAppointmentTime(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(d);
+}
+function localDayKey(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function InteractionCard({ interaction, brand, brandTextColor, defaultEmail, disabled, onAction }: {
+  interaction: WidgetInteraction;
+  brand: string;
+  brandTextColor: string;
+  defaultEmail?: string;
+  disabled?: boolean;
+  onAction: (message: string, action: WidgetAction) => void;
+}) {
+  const base: React.CSSProperties = { marginTop: 8, border: "1px solid rgba(15,23,42,.10)", borderRadius: 16, background: "#fff", boxShadow: "0 8px 24px rgba(15,23,42,.06)", overflow: "hidden" };
+  const head: React.CSSProperties = { padding: "13px 14px 10px", borderBottom: "1px solid rgba(15,23,42,.07)" };
+  const btn: React.CSSProperties = { border: "1px solid rgba(15,23,42,.10)", borderRadius: 11, background: "#fff", color: COLORS.fg, padding: "9px 10px", fontSize: 12, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer" };
+  const primary: React.CSSProperties = { ...btn, background: brand, color: brandTextColor, borderColor: brand, boxShadow: `0 5px 12px ${hexToRgba(brand,.18)}` };
+  const inputStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", border: "1px solid rgba(15,23,42,.13)", borderRadius: 10, padding: "10px 11px", fontSize: 13, outline: "none", color: COLORS.fg, background: "#fff" };
+
+  if (interaction.type === "appointment_type_picker") {
+    return <div style={base}>
+      <div style={head}><div style={{fontWeight:800,fontSize:14}}>{interaction.title}</div>{interaction.description?<div style={{fontSize:12,color:COLORS.muted,marginTop:3}}>{interaction.description}</div>:null}</div>
+      <div style={{padding:12,display:"grid",gap:8}}>{interaction.eventTypes.map((e)=><button key={e.uri} disabled={disabled} style={{...btn,textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}} onClick={()=>onAction(`Show me available times for ${e.name}`,{type:"calendly_event_type_selected",payload:{eventTypeUri:e.uri,eventTypeName:e.name,duration:e.duration}})}><span>{e.name}</span><span style={{color:COLORS.muted,fontWeight:600}}>{e.duration?`${e.duration} min`:"Select"} →</span></button>)}</div>
+    </div>;
+  }
+
+  if (interaction.type === "appointment_picker") {
+    const groups = interaction.slots.reduce<Record<string, Array<{startTime:string}>>>((acc, slot)=>{ const k=localDayKey(slot.startTime); (acc[k]??=[]).push(slot); return acc; },{});
+    const days=Object.keys(groups).slice(0,14);
+    const [day,setDay]=useState(days[0]??"");
+    const [slot,setSlot]=useState("");
+    const [name,setName]=useState("");
+    const [email,setEmail]=useState(defaultEmail??"");
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London";
+    return <div style={base}>
+      <div style={head}><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:30,height:30,borderRadius:10,background:hexToRgba(brand,.1),color:brand,display:"grid",placeItems:"center"}}>◷</div><div><div style={{fontWeight:800,fontSize:14}}>{interaction.title}</div><div style={{fontSize:12,color:COLORS.muted,marginTop:2}}>{interaction.eventType.name}{interaction.eventType.duration?` · ${interaction.eventType.duration} min`:""}</div></div></div></div>
+      <div style={{padding:"11px 12px 4px",display:"flex",gap:7,overflowX:"auto"}}>{days.map((d)=>{const active=d===day; const first=groups[d][0]?.startTime; return <button key={d} disabled={disabled} style={{...btn,minWidth:82,background:active?hexToRgba(brand,.10):"#fff",borderColor:active?hexToRgba(brand,.45):"rgba(15,23,42,.10)",color:active?brand:COLORS.fg}} onClick={()=>{setDay(d);setSlot("")}}>{formatAppointmentDate(first)}</button>})}</div>
+      <div style={{padding:12,display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:7}}>{(groups[day]??[]).map((x)=>{const active=x.startTime===slot; return <button key={x.startTime} disabled={disabled} style={{...btn,background:active?brand:"#fff",color:active?brandTextColor:COLORS.fg,borderColor:active?brand:"rgba(15,23,42,.10)"}} onClick={()=>setSlot(x.startTime)}>{formatAppointmentTime(x.startTime)}</button>})}</div>
+      {slot?<div style={{padding:"0 12px 12px",display:"grid",gap:8}}><div style={{height:1,background:"rgba(15,23,42,.07)",margin:"2px 0 3px"}}/><div style={{fontWeight:800,fontSize:13}}>Your details</div><input style={inputStyle} placeholder="Name" value={name} onChange={(e)=>setName(e.target.value)}/><input style={inputStyle} type="email" placeholder="Email" value={email} onChange={(e)=>setEmail(e.target.value)}/><button disabled={disabled||!name.trim()||!email.trim()} style={{...primary,opacity:(!name.trim()||!email.trim()) ? .45 : 1}} onClick={()=>onAction(`Confirm ${interaction.eventType.name} for ${formatAppointmentDate(slot)} at ${formatAppointmentTime(slot)}`,{type:"calendly_book",payload:{eventTypeUri:interaction.eventType.uri,eventTypeName:interaction.eventType.name,startTime:slot,name:name.trim(),email:email.trim(),timezone:zone}})}>Confirm booking</button><div style={{fontSize:10,color:COLORS.muted,textAlign:"center"}}>Your appointment is only booked after you press Confirm booking.</div></div>:null}
+    </div>;
+  }
+
+  if (interaction.type === "action_form") {
+    const schema:any=interaction.schema||{}; const props=(schema.properties||{}) as Record<string,any>; const required=new Set(Array.isArray(schema.required)?schema.required.map(String):[]);
+    const initial={...(interaction.values||{})} as Record<string,any>;
+    const [values,setValues]=useState<Record<string,any>>(initial);
+    const fields=Object.entries(props);
+    const missing=fields.some(([k])=>required.has(k)&&String(values[k]??"").trim()==="");
+    return <div style={base}><div style={head}><div style={{fontWeight:800,fontSize:14}}>{interaction.title}</div>{interaction.description?<div style={{fontSize:12,color:COLORS.muted,marginTop:3}}>{interaction.description}</div>:null}</div><div style={{padding:12,display:"grid",gap:9}}>{fields.map(([key,rule]:any)=>{const label=rule.title||rule.description||key.replace(/_/g," "); if(Array.isArray(rule.enum)) return <label key={key} style={{display:"grid",gap:5,fontSize:11,fontWeight:700,color:COLORS.muted}}>{label}<select style={inputStyle} value={values[key]??""} onChange={(e)=>setValues(v=>({...v,[key]:e.target.value}))}><option value="">Choose…</option>{rule.enum.map((x:any)=><option key={String(x)} value={String(x)}>{String(x)}</option>)}</select></label>; return <label key={key} style={{display:"grid",gap:5,fontSize:11,fontWeight:700,color:COLORS.muted}}>{label}<input style={inputStyle} type={rule.format==="email"?"email":rule.type==="number"||rule.type==="integer"?"number":"text"} value={values[key]??""} onChange={(e)=>setValues(v=>({...v,[key]:rule.type==="number"||rule.type==="integer"?Number(e.target.value):e.target.value}))}/></label>})}<button disabled={disabled||missing} style={{...primary,opacity:missing ? .45 : 1}} onClick={()=>onAction(interaction.requireConfirmation?`Review ${interaction.actionName}`:`Continue with ${interaction.actionName}`,{type:"connector_action_submit",payload:{actionId:interaction.actionId,input:values}})}>{interaction.submitLabel||"Continue"}</button></div></div>;
+  }
+
+  if (interaction.type === "action_confirmation") {
+    return <div style={base}><div style={head}><div style={{fontWeight:800,fontSize:14}}>{interaction.title}</div>{interaction.description?<div style={{fontSize:12,color:COLORS.muted,marginTop:3}}>{interaction.description}</div>:null}</div><div style={{padding:12}}><button disabled={disabled} style={{...primary,width:"100%"}} onClick={()=>onAction(`Confirm ${interaction.actionName}`,{type:"connector_action_confirm",payload:{actionId:interaction.actionId,input:interaction.input}})}>{interaction.confirmLabel||"Confirm"}</button></div></div>;
+  }
+
+  if (interaction.type === "booking_confirmation") {
+    return <div style={{...base,borderColor:hexToRgba(brand,.28)}}><div style={{padding:14,display:"flex",gap:11,alignItems:"flex-start"}}><div style={{width:34,height:34,borderRadius:11,background:hexToRgba(brand,.12),color:brand,display:"grid",placeItems:"center",fontWeight:900}}>✓</div><div><div style={{fontWeight:850,fontSize:14}}>{interaction.title}</div>{interaction.eventName?<div style={{fontSize:12,marginTop:4}}>{interaction.eventName}</div>:null}{interaction.startTime?<div style={{fontSize:12,color:COLORS.muted,marginTop:3}}>{formatAppointmentDate(interaction.startTime)} · {formatAppointmentTime(interaction.startTime)}</div>:null}</div></div></div>;
+  }
+  return null;
 }
 
 export function mountWidget(el: HTMLElement, config: WidgetConfig) {
@@ -283,13 +371,42 @@ export function Widget({ config }: { config: WidgetConfig }) {
         setShowEmailPrompt(true);
         setPendingEmailAction(trimmed);
       }
-      setMessages((m) => [...m, { role: "assistant", content: assistantContent, products: data.products }]);
+      setMessages((m) => [...m, { role: "assistant", content: assistantContent, products: data.products, interaction: data.interaction }]);
     } catch (e) {
       setMessages((m) => [...m, { role: "assistant", content: "Sorry — I couldn't reach the assistant right now. Please try again in a moment.", error: true }]);
       console.error(e);
     } finally {
       setLoading(false);
     }
+  }
+
+
+  async function sendAction(displayText: string, widgetAction: WidgetAction) {
+    const trimmed = displayText.trim();
+    if (!trimmed || loading) return;
+    setMessages((m) => [...m, { role: "user", content: trimmed }]);
+    setLoading(true);
+    try {
+      const res = await fetch(`${config.apiUrl.replace(/\/+$/, "")}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatbotId: config.chatbotId, message: trimmed, conversationId, conversationToken, customerEmail: effectiveEmail, emailConsent: emailConsent || undefined, widgetAction } satisfies ChatApiRequest),
+      });
+      if (!res.ok) throw new Error(`chat action failed: ${res.status}`);
+      const data = (await res.json()) as ChatApiResponse;
+      setConversationId(data.conversationId);
+      setConversationToken(data.conversationToken);
+      let assistantContent = data.reply ?? "";
+      if (!assistantContent || assistantContent.startsWith("tool:")) assistantContent = "Sorry — I couldn't complete that action. Please try again.";
+      if (widgetAction.type === "calendly_book") {
+        const email = String(widgetAction.payload.email ?? "").trim();
+        if (email) { try { localStorage.setItem(WIDGET_EMAIL_KEY, email); setStoredEmail(email); } catch { /* ignore */ } }
+      }
+      setMessages((m) => [...m, { role: "assistant", content: assistantContent, products: data.products, interaction: data.interaction }]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "assistant", content: "Sorry — I couldn't complete that action right now. Please try again in a moment.", error: true }]);
+      console.error(e);
+    } finally { setLoading(false); }
   }
 
   function handleAddToCart(product: Product) {
@@ -675,6 +792,9 @@ export function Widget({ config }: { config: WidgetConfig }) {
                       </div>
                     </div>
                   ))}
+                  {m.role === "assistant" && m.interaction ? (
+                    <InteractionCard interaction={m.interaction} brand={brand} brandTextColor={brandTextColor} defaultEmail={effectiveEmail} disabled={loading} onAction={sendAction} />
+                  ) : null}
                   {m.role === "assistant" && conversationId && !m.error && (
                     <div style={s.feedback}>
                       Helpful?

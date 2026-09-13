@@ -12,10 +12,10 @@ import {
 } from "./policy.ts";
 import { executeTool, searchTenantWebsite, summarizeProducts, TOOL_SPECS, TOOL_PERMISSIONS } from "./tools.ts";
 import { createIntegrationRouter, toolSupported } from "./integrations/router.ts";
-import type { ChatRequest, ChatResponse, Conversation, Product, Tenant, TenantPolicy, ToolPermission } from "./types.ts";
+import type { ChatRequest, ChatResponse, Conversation, Product, Tenant, TenantPolicy, ToolPermission, WidgetInteraction } from "./types.ts";
 import { DEFAULT_CHATBOT_PERMISSIONS } from "./types.ts";
 import { redactForStorage } from "./privacy.ts";
-import { connectorActionTool, listRuntimeActions } from "./connectors/runtime.ts";
+import { connectorActionTool, listRuntimeActions, executeConnectorAction } from "./connectors/runtime.ts";
 import { entitlementsForTenant } from "./entitlements.ts";
 
 export const MAX_TOOL_TURNS = 6;
@@ -271,6 +271,54 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     emailFromMessage ||
     "";
 
+  // Structured widget interactions bypass model interpretation. The widget can
+  // submit a selected appointment, completed action form, or confirmation and
+  // the server routes it only to an already-approved tenant action.
+  if (req.widgetAction && allowed.has("run_connector_action")) {
+    const wa = req.widgetAction;
+    let actionResult: Awaited<ReturnType<typeof executeConnectorAction>> | null = null;
+    if (wa.type === "calendly_event_type_selected") {
+      const p = wa.payload ?? {};
+      const availability = runtimeActions.find((a) => a.provider === "calendly" && a.name === "Check Calendly availability" && a.method === "GET");
+      const eventType = typeof p.eventTypeUri === "string" ? p.eventTypeUri : "";
+      if (availability && eventType) {
+        const start = new Date(Date.now() + 5 * 60 * 1000);
+        const end = new Date(start.getTime() + 14 * 24 * 60 * 60 * 1000);
+        actionResult = await executeConnectorAction({ tenantId: tenant.id, actionId: availability.id, input: { event_type: eventType, start_time: start.toISOString(), end_time: end.toISOString() }, confirmed: false, userMessage: req.message, conversationId: persistConversation ? conversationId : undefined });
+        if (actionResult.interaction?.type === "appointment_picker") {
+          actionResult.interaction.eventType = { uri: eventType, name: typeof p.eventTypeName === "string" ? p.eventTypeName : "Appointment", duration: typeof p.duration === "number" ? p.duration : undefined };
+        }
+      }
+    } else if (wa.type === "calendly_book") {
+      const p = wa.payload ?? {};
+      const booking = runtimeActions.find((a) => a.provider === "calendly" && a.name === "Book Calendly appointment" && a.method === "POST");
+      const eventType = typeof p.eventTypeUri === "string" ? p.eventTypeUri : "";
+      const startTime = typeof p.startTime === "string" ? p.startTime : "";
+      const name = typeof p.name === "string" ? p.name.trim() : "";
+      const email = typeof p.email === "string" ? p.email.trim() : knownEmail;
+      const timezone = typeof p.timezone === "string" ? p.timezone : "Europe/London";
+      if (booking && eventType && startTime && name && email) {
+        actionResult = await executeConnectorAction({ tenantId: tenant.id, actionId: booking.id, input: { event_type: eventType, start_time: startTime, invitee: { name, email, timezone } }, confirmed: true, userMessage: "confirm book it", conversationId: persistConversation ? conversationId : undefined });
+        if (actionResult.interaction?.type === "booking_confirmation" && typeof p.eventTypeName === "string") actionResult.interaction.eventName = p.eventTypeName;
+      } else {
+        actionResult = { ok: false, text: "Please enter your name and email address to complete the booking.", interaction: { type: "action_form", title: "Your details", description: "Enter the details for the appointment.", actionId: booking?.id ?? "", actionName: "Book Calendly appointment", schema: { type: "object", properties: { name: { type: "string", title: "Name" }, email: { type: "string", title: "Email", format: "email" } }, required: ["name", "email"] }, values: { eventTypeUri: eventType, startTime }, submitLabel: "Confirm booking", requireConfirmation: true } };
+      }
+    } else if (wa.type === "connector_action_submit" || wa.type === "connector_action_confirm") {
+      const p = wa.payload ?? {};
+      const actionId = typeof p.actionId === "string" ? p.actionId : "";
+      const input = p.input && typeof p.input === "object" && !Array.isArray(p.input) ? p.input as Record<string, unknown> : {};
+      if (actionId && runtimeActions.some((a) => a.id === actionId)) actionResult = await executeConnectorAction({ tenantId: tenant.id, actionId, input, confirmed: wa.type === "connector_action_confirm", userMessage: wa.type === "connector_action_confirm" ? "confirm proceed" : req.message, conversationId: persistConversation ? conversationId : undefined });
+    }
+    if (actionResult) {
+      const reply = actionResult.text || (actionResult.ok ? "Done." : "I need a little more information.");
+      if (persistConversation) {
+        await db.appendMessage({ id: crypto.randomUUID(), conversationId, role: "user", content: tenant.piiRedactionEnabled === false ? req.message : redactForStorage(req.message), createdAt: new Date().toISOString() });
+        await db.appendMessage({ id: crypto.randomUUID(), conversationId, role: "assistant", content: tenant.piiRedactionEnabled === false ? reply : redactForStorage(reply), createdAt: new Date().toISOString() });
+      }
+      return { reply, products: [], interaction: actionResult.interaction, conversationId };
+    }
+  }
+
   // convo5 — GDPR + account-gated flows (deterministic, no model spend).
   // 1) Data-subject requests (access/erasure): explain rights + offer a
   //    support ticket (erasure is human-processed, never automated).
@@ -316,6 +364,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
 
   let finalContent = "";
   let products: Product[] = [];
+  let pendingInteraction: WidgetInteraction | undefined;
   let toolTurns = 0;
   let echoRecoveries = 0;
   // Deterministic authoritative-capability routing: at most one forced tool call per request.
@@ -334,7 +383,8 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     const toolStartedAt = Date.now();
     const toolResult = await executeTool(directConnector.name, directConnector.arguments, ctx);
     agentTrace(req.requestId, "tool:done", agentStartedAt, { tool: directConnector.name, toolTurn: 1, direct: true, toolElapsedMs: Date.now() - toolStartedAt, ok: toolResult.ok });
-    if (toolResult.ok) { finalContent = toolResult.text; toolTurns = 1; deterministicRouted = true; }
+    if (toolResult.interaction) { pendingInteraction = toolResult.interaction; finalContent = toolResult.text; toolTurns = 1; deterministicRouted = true; }
+    else if (toolResult.ok) { finalContent = toolResult.text; toolTurns = 1; deterministicRouted = true; }
   }
 
   for (;;) {
@@ -367,6 +417,12 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
         agentTrace(req.requestId, "tool:start", agentStartedAt, { tool: call.name, toolTurn: toolTurns });
         const toolResult = await executeTool(call.name, call.arguments, ctx);
         agentTrace(req.requestId, "tool:done", agentStartedAt, { tool: call.name, toolTurn: toolTurns, toolElapsedMs: Date.now() - toolStartedAt });
+        if (toolResult.interaction) {
+          pendingInteraction = toolResult.interaction;
+          finalContent = toolResult.text;
+          if (toolResult.products?.length) products.push(...toolResult.products);
+          break;
+        }
         transcript.push({
           role: "assistant",
           content: `tool:${call.name}:${JSON.stringify(call.arguments ?? {})}`,
@@ -374,6 +430,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
         transcript.push({ role: "user", content: toolResult.text });
         if (toolResult.products?.length) products.push(...toolResult.products);
       }
+      if (pendingInteraction) break;
       continue;
     }
 
@@ -468,6 +525,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   return {
     reply: finalReply,
     products: dedupeProducts(products).slice(0, 6),
+    interaction: pendingInteraction,
     conversationId,
   };
 }

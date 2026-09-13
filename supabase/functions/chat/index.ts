@@ -93,6 +93,7 @@ Deno.serve(async (req: Request) => {
       conversationId,
       customerEmail: typeof body.customerEmail === "string" ? body.customerEmail : undefined,
       emailConsent: body.emailConsent === true ? true : undefined,
+      widgetAction: body.widgetAction && typeof body.widgetAction === "object" && !Array.isArray(body.widgetAction) ? body.widgetAction as any : undefined,
     });
     trace(requestId, "agent:done", startedAt, { hasConversation: Boolean(result.conversationId), replyLength: result.reply?.length ?? 0 });
     if (controls) {

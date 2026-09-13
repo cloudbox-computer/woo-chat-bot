@@ -1,4 +1,4 @@
-import type { CartItem, Order, Product, Tenant, Ticket, TicketCategory, ToolPermission } from "./types.ts";
+import type { CartItem, Order, Product, Tenant, Ticket, TicketCategory, ToolPermission, WidgetInteraction } from "./types.ts";
 import { TICKET_CATEGORIES } from "./types.ts";
 import type { ToolSpec } from "./ai.ts";
 import { enqueueJob } from "./jobs.ts";
@@ -26,6 +26,7 @@ export type ToolResult = {
   ok: boolean;
   text: string;
   products?: Product[];
+  interaction?: WidgetInteraction;
 };
 
 // Email used to verify ticket ownership / support follow-up (server-side).

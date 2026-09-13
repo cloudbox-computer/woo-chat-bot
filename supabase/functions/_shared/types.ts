@@ -341,6 +341,53 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+export type WidgetInteraction =
+  | {
+      type: "appointment_type_picker";
+      title: string;
+      description?: string;
+      eventTypes: Array<{ uri: string; name: string; duration?: number }>;
+    }
+  | {
+      type: "appointment_picker";
+      title: string;
+      description?: string;
+      eventType: { uri: string; name: string; duration?: number };
+      slots: Array<{ startTime: string }>;
+    }
+  | {
+      type: "action_form";
+      title: string;
+      description?: string;
+      actionId: string;
+      actionName: string;
+      schema: Record<string, unknown>;
+      values?: Record<string, unknown>;
+      submitLabel?: string;
+      requireConfirmation?: boolean;
+    }
+  | {
+      type: "action_confirmation";
+      title: string;
+      description?: string;
+      actionId: string;
+      actionName: string;
+      input: Record<string, unknown>;
+      confirmLabel?: string;
+    }
+  | {
+      type: "booking_confirmation";
+      title: string;
+      startTime?: string;
+      eventName?: string;
+      inviteeName?: string;
+    };
+
+export interface WidgetAction {
+  type: "calendly_event_type_selected" | "calendly_book" | "connector_action_submit" | "connector_action_confirm";
+  payload: Record<string, unknown>;
+}
+
 export interface ChatRequest {
   /** Correlation id used only for server-side tracing; never persisted as customer content. */
   requestId?: string;
@@ -351,11 +398,14 @@ export interface ChatRequest {
   customerEmail?: string;
   /** GDPR consent for storing the customer email for support (widget consent box). */
   emailConsent?: boolean;
+  /** Structured widget submission. The server validates and routes this; the model never invents it. */
+  widgetAction?: WidgetAction;
 }
 
 export interface ChatResponse {
   reply: string;
   products?: Product[];
+  interaction?: WidgetInteraction;
   conversationId: string;
   conversationToken?: string;
 }
