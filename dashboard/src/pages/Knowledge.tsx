@@ -6,20 +6,37 @@ import {
 } from "../lib/api";
 import { Card, Field, Spinner, ErrorBox, Badge, toast } from "../components/ui";
 
-const SOURCE_TYPES: Array<{kind:DataSourceKind;name:string;desc:string}> = [
-  {kind:"file",name:"Files",desc:"PDF, DOC, DOCX, TXT, MD, CSV, XLSX, PPTX, HTML and JSON"},
-  {kind:"website",name:"Website",desc:"Crawl a site with include/exclude paths and depth limits"},
-  {kind:"sitemap",name:"Sitemap",desc:"Index URLs from an XML sitemap"},
-  {kind:"url",name:"Single URL",desc:"Index one public page"},
-  {kind:"text",name:"Text",desc:"Paste authoritative text or internal guidance"},
-  {kind:"qa",name:"Q&A",desc:"Maintain structured questions and answers"},
-  {kind:"notion",name:"Notion",desc:"Sync pages from your connected Notion workspace"},
-  {kind:"google_drive",name:"Google Drive",desc:"Sync supported files from Drive or a folder"},
-  {kind:"dropbox",name:"Dropbox",desc:"Sync supported files from a Dropbox path"},
-  {kind:"zendesk",name:"Zendesk",desc:"Sync Help Center articles"},
-  {kind:"wordpress",name:"WordPress",desc:"Sync published pages and posts"},
+const SOURCE_TYPES: Array<{kind:DataSourceKind;name:string;desc:string;icon:string}> = [
+  {kind:"file",name:"Files",desc:"PDF, DOC, DOCX, TXT, MD, CSV, XLSX, PPTX, HTML and JSON",icon:"file"},
+  {kind:"website",name:"Website",desc:"Crawl a site with include/exclude paths and depth limits",icon:"globe"},
+  {kind:"sitemap",name:"Sitemap",desc:"Index URLs from an XML sitemap",icon:"sitemap"},
+  {kind:"url",name:"Single URL",desc:"Index one public page",icon:"link"},
+  {kind:"text",name:"Text",desc:"Paste authoritative text or internal guidance",icon:"text"},
+  {kind:"qa",name:"Q&A",desc:"Maintain structured questions and answers",icon:"chat"},
+  {kind:"notion",name:"Notion",desc:"Sync pages from your connected Notion workspace",icon:"notion"},
+  {kind:"google_drive",name:"Google Drive",desc:"Sync supported files from Drive or a folder",icon:"drive"},
+  {kind:"dropbox",name:"Dropbox",desc:"Sync supported files from a Dropbox path",icon:"dropbox"},
+  {kind:"zendesk",name:"Zendesk",desc:"Sync Help Center articles",icon:"zendesk"},
+  {kind:"wordpress",name:"WordPress",desc:"Sync published pages and posts",icon:"wordpress"},
 ];
 const ACCEPT = ".pdf,.doc,.docx,.txt,.md,.csv,.xlsx,.pptx,.html,.htm,.json";
+
+function SourceTypeIcon({ icon }: { icon: string }) {
+  const common = { width: 22, height: 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  switch (icon) {
+    case "globe": return <svg {...common}><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>;
+    case "sitemap": return <svg {...common}><path d="M12 4v5M6 20v-5h12v5M6 15v-3h12v3"/><rect x="9" y="2" width="6" height="4" rx="1"/><rect x="3" y="18" width="6" height="4" rx="1"/><rect x="15" y="18" width="6" height="4" rx="1"/></svg>;
+    case "link": return <svg {...common}><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>;
+    case "text": return <svg {...common}><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v5h5M10 12h5M10 16h5"/></svg>;
+    case "chat": return <svg {...common}><path d="M21 11.5a8 8 0 0 1-8.5 8L7 22v-3.4A8 8 0 1 1 21 11.5Z"/><path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01"/></svg>;
+    case "notion": return <span className="source-brand-glyph notion">N</span>;
+    case "drive": return <span className="source-brand-glyph drive">△</span>;
+    case "dropbox": return <span className="source-brand-glyph dropbox">◆</span>;
+    case "zendesk": return <span className="source-brand-glyph zendesk">Z</span>;
+    case "wordpress": return <span className="source-brand-glyph wordpress">W</span>;
+    default: return <svg {...common}><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v5h5"/></svg>;
+  }
+}
 
 function statusBadge(status:string){
   const tone=status==="ready"?"ok":status==="error"?"danger":status==="syncing"||status==="pending"?"warn":undefined;
@@ -96,10 +113,11 @@ export default function KnowledgePage({ tenantId }: { tenantId: string }) {
     </div>
     {items.length===0?<Card><div className="empty-state"><h3>No data sources yet</h3><p className="muted">Add files, websites, remote documents or Q&A so this assistant has grounded business knowledge.</p><button className="btn primary" onClick={()=>setShowAdd(true)}>Add your first source</button></div></Card>:<div className="source-list">{items.map(item=><Card key={item.id} className="source-card"><div className="source-card-main"><div className="source-icon">{SOURCE_TYPES.find(x=>x.kind===item.kind)?.name.slice(0,1)??"D"}</div><div className="source-info"><div className="source-title-row"><h3>{item.name}</h3>{statusBadge(item.status)}</div><div className="source-meta"><span>{SOURCE_TYPES.find(x=>x.kind===item.kind)?.name??item.kind}</span><span>{item.document_count||0} docs</span><span>{item.chunk_count||0} chunks</span><span>Last sync: {ago(item.last_sync_at)}</span></div>{item.last_error&&<div className="source-error">{item.last_error}</div>}</div></div><div className="source-actions"><button className="btn secondary sm" disabled={busy||item.status==="syncing"} onClick={()=>sync(item)}>Sync now</button><button className="btn secondary sm" onClick={()=>openDocs(item)}>Documents</button><button className="btn secondary sm" disabled={busy} onClick={()=>pause(item)}>{item.status==="paused"?"Resume":"Pause"}</button><button className="btn secondary sm danger-btn" disabled={busy} onClick={()=>remove(item)}>Delete</button></div></Card>)}</div>}
 
-    {showAdd&&<div className="modal-overlay" onClick={()=>!busy&&setShowAdd(false)}><div className="modal source-modal" onClick={e=>e.stopPropagation()}><div className="modal-head"><div><h2>Add data source</h2><p className="desc">Choose what this assistant should learn from.</p></div><button className="icon-button" disabled={busy} onClick={()=>setShowAdd(false)}>×</button></div>
-      <div className="source-type-grid">{SOURCE_TYPES.map(t=><button key={t.kind} type="button" className={`source-type ${kind===t.kind?"selected":""}`} onClick={()=>setKind(t.kind)}><strong>{t.name}</strong><small>{t.desc}</small></button>)}</div>
-      <Field label="Source name" hint="Optional. A sensible name is generated if left blank."><input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Customer support handbook"/></Field>
-      {kind==="file"&&<Field label="Choose file" hint="Maximum 50 MB. Supported: PDF, DOCX, TXT, MD, CSV, XLSX, PPTX, HTML, JSON."><input type="file" accept={ACCEPT} onChange={e=>setFile(e.target.files?.[0]??null)}/>{file&&<div className="muted" style={{marginTop:6}}>{file.name} · {(file.size/1024/1024).toFixed(2)} MB</div>}</Field>}
+    {showAdd&&<div className="modal-overlay source-modal-overlay" onClick={()=>!busy&&setShowAdd(false)}><div className="modal source-modal" onClick={e=>e.stopPropagation()}><div className="modal-head source-modal-head"><div className="source-modal-title"><div className="source-modal-title-icon"><SourceTypeIcon icon="file"/></div><div><h2>Add data source</h2><p className="desc">Choose what this assistant should learn from. Connect content to give more accurate and helpful answers.</p></div></div><button className="icon-button source-modal-close" aria-label="Close" disabled={busy} onClick={()=>setShowAdd(false)}>×</button></div>
+      <div className="source-type-grid">{SOURCE_TYPES.map(t=><button key={t.kind} type="button" className={`source-type ${kind===t.kind?"selected":""}`} onClick={()=>setKind(t.kind)}><span className="source-type-icon"><SourceTypeIcon icon={t.icon}/></span><span className="source-type-copy"><strong>{t.name}</strong><small>{t.desc}</small></span>{kind===t.kind&&<span className="source-type-check">✓</span>}</button>)}</div>
+      <div className="source-form-divider"/>
+      <Field label="Source name" hint="A sensible name is generated automatically if left blank."><div className="input-with-icon"><span className="input-leading-icon"><SourceTypeIcon icon={SOURCE_TYPES.find(x=>x.kind===kind)?.icon||"file"}/></span><input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Customer support handbook"/></div></Field>
+      {kind==="file"&&<Field label="Choose file"><label className={`file-drop-zone ${file?"has-file":""}`}><input className="file-native-input" type="file" accept={ACCEPT} onChange={e=>setFile(e.target.files?.[0]??null)}/><span className="file-upload-icon">↑</span><span className="file-drop-copy">{file?<><strong>{file.name}</strong><small>{(file.size/1024/1024).toFixed(2)} MB · Click to replace</small></>:<><span>Drag and drop a file here, or <strong>click to browse</strong></span><small>Maximum 50 MB. Supported: PDF, DOC, DOCX, TXT, MD, CSV, XLSX, PPTX, HTML, JSON.</small></>}</span></label></Field>}
       {(["website","sitemap","url"] as DataSourceKind[]).includes(kind)&&<Field label={kind==="website"?"Website URL":kind==="sitemap"?"Sitemap URL":"Page URL"}><input type="url" value={url} onChange={e=>setUrl(e.target.value)} placeholder={kind==="sitemap"?"https://example.com/sitemap.xml":"https://example.com"}/></Field>}
       {kind==="website"&&<><div className="form-grid-2"><Field label="Max pages"><input type="number" min={1} max={500} value={maxPages} onChange={e=>setMaxPages(Number(e.target.value))}/></Field><Field label="Max crawl depth"><input type="number" min={0} max={5} value={maxDepth} onChange={e=>setMaxDepth(Number(e.target.value))}/></Field></div><div className="form-grid-2"><Field label="Include paths" hint="Optional, one pattern per line. * wildcard supported."><textarea value={includePaths} onChange={e=>setIncludePaths(e.target.value)} placeholder="/help/*"/></Field><Field label="Exclude paths"><textarea value={excludePaths} onChange={e=>setExcludePaths(e.target.value)}/></Field></div></>}
       {kind==="sitemap"&&<Field label="Max pages"><input type="number" min={1} max={1000} value={maxPages} onChange={e=>setMaxPages(Number(e.target.value))}/></Field>}
