@@ -38,6 +38,7 @@ export interface AuthUser {
   id: string;
   email?: string;
   role?: string;
+  aal?: string;
 }
 
 export interface DashboardContext {
@@ -81,6 +82,7 @@ export function authUserFromRequest(req: Request): AuthUser | null {
     id,
     email: typeof payload.email === "string" ? payload.email : undefined,
     role: typeof payload.role === "string" ? payload.role : undefined,
+    aal: typeof payload.aal === "string" ? payload.aal : undefined,
   };
 }
 
@@ -95,6 +97,51 @@ export class DashboardError extends Error {
 }
 
 export const API = `${(env("SUPABASE_URL") ?? "").replace(/\/+$/g, "")}/rest/v1`;
+
+
+export function requestIp(req: Request): string {
+  const direct = req.headers.get("cf-connecting-ip") || req.headers.get("x-real-ip");
+  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  return (direct || forwarded || "").replace(/^\[|\]$/g, "").trim();
+}
+
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  const nums = parts.map(Number);
+  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+  return (((nums[0] << 24) >>> 0) + (nums[1] << 16) + (nums[2] << 8) + nums[3]) >>> 0;
+}
+
+export function matchesIpRule(ip: string, rule: string): boolean {
+  const clean = rule.trim().replace(/^\[|\]$/g, "");
+  if (!clean) return false;
+  if (!clean.includes("/")) return ip.toLowerCase() === clean.toLowerCase();
+  const [base, bitsRaw] = clean.split("/");
+  const bits = Number(bitsRaw);
+  const a = ipv4ToInt(ip); const b = ipv4ToInt(base);
+  if (a === null || b === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return (a & mask) === (b & mask);
+}
+
+async function hashSecurityValue(value: string): Promise<string> {
+  const salt = env("SUPABASE_SERVICE_ROLE_KEY") ?? "zochat";
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${salt}:${value}`));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2,"0")).join("");
+}
+
+async function securityEvent(tenantId: string, userId: string, req: Request, eventType: string, severity: "info"|"warning"|"critical", metadata: Record<string,unknown> = {}): Promise<void> {
+  try {
+    const key = env("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const ip = requestIp(req);
+    await fetch(`${API}/security_events`, {
+      method: "POST",
+      headers: {Authorization:`Bearer ${key}`,apikey:key,"Content-Type":"application/json",Prefer:"return=minimal"},
+      body: JSON.stringify({tenant_id:tenantId,actor_user_id:userId,event_type:eventType,severity,ip_hash:ip?await hashSecurityValue(ip):null,user_agent:(req.headers.get("user-agent")??"").slice(0,500),metadata}),
+    });
+  } catch { /* security logging must not create an availability failure */ }
+}
 
 /**
  * Resolve the authenticated user's tenant by looking up tenant_members with
@@ -142,6 +189,22 @@ export async function resolveDashboardContext(
   const row = data[0];
   if (!row) throw new DashboardError("Tenant not found", 404);
 
+  const ipRules = Array.isArray(row.ip_allowlist) ? row.ip_allowlist.map(String).map((v)=>v.trim()).filter(Boolean) : [];
+  if (ipRules.length) {
+    const ip = requestIp(req);
+    if (!ip || !ipRules.some((rule)=>matchesIpRule(ip,rule))) {
+      await securityEvent(String(row.id), user.id, req, "dashboard.ip_denied", "warning", { hasIp: Boolean(ip) });
+      throw new DashboardError("This network is not allowed for this workspace", 403, "IP_NOT_ALLOWED");
+    }
+  }
+
+  // Workspace-enforced MFA: once enabled, dashboard API access requires an
+  // AAL2 Supabase session. Owners can only enable this from an AAL2 session.
+  if (row.mfa_required === true && user.aal !== "aal2") {
+    await securityEvent(String(row.id), user.id, req, "dashboard.mfa_required", "info");
+    throw new DashboardError("Multi-factor authentication is required for this workspace", 403, "MFA_REQUIRED");
+  }
+
   // Defence in depth for plan downgrades: Starter is single-user (owner only).
   // Growth/Scale and legacy workspaces may use team memberships.
   if (row.billing_enforced === true && String(row.plan ?? "").toLowerCase() === "starter" && membership.role !== "owner") {
@@ -157,6 +220,10 @@ export async function resolveDashboardContext(
     billingEnforced: row.billing_enforced === true,
     subscriptionStatus: row.subscription_status ? String(row.subscription_status) : undefined,
     maxAssistants: Number(row.max_assistants ?? 1),
+    zeroDataRetention: row.zero_data_retention === true,
+    storeConversations: row.zero_data_retention === true ? false : row.store_conversations !== false,
+    piiRedactionEnabled: row.pii_redaction_enabled !== false,
+    hipaaMode: row.hipaa_mode === true,
     storeUrl: row.store_url ? String(row.store_url) : undefined,
     welcomeMessage: String(row.welcome_message ?? ""),
     tone: row.tone ? String(row.tone) : undefined,

@@ -31,8 +31,9 @@ check('enterprise migration', migration.includes('audit_logs') && migration.incl
 check('usage aggregate RPC', schema.includes('tenant_usage_current_month'));
 check('service role RPC grants', schema.includes('grant execute on function public.tenant_usage_current_month(uuid) to service_role'));
 check('knowledge version bigint', schema.includes('version bigint not null'));
-check('GDPR export includes messages/tickets', dashboard.includes('{ conversations, messages, tickets }'));
-check('CI has no test failure masking', !text('.github/workflows/ci.yml').includes('bun test ||'));
+check('GDPR export includes messages/tickets/consents', dashboard.includes('conversations, messages, feedback, carts, tickets, ticketMessages, consents'));
+const gateFile = fs.existsSync(path.join(root,'.github/workflows/ci.yml')) ? '.github/workflows/ci.yml' : '.github/workflows/production-gate.yml';
+check('CI has no test failure masking', !text(gateFile).includes('bun test ||') && !text(gateFile).includes('|| true'));
 check('CodeQL enabled', fs.existsSync(path.join(root,'.github/workflows/codeql.yml')));
 check('Dependabot enabled', fs.existsSync(path.join(root,'.github/dependabot.yml')));
 check('deployment runbook exists', fs.existsSync(path.join(root,'ENTERPRISE_DEPLOYMENT.md')));
@@ -43,6 +44,11 @@ check('AI tool surface is provider-neutral', tools.includes('search_business_dat
 check('capability router gates tool availability', router.includes('TOOL_CAPABILITIES') && router.includes('toolSupported'));
 check('production Woo client has no mock catalogue fallback', !woo.includes('MockWooClient') && !woo.includes('IVY_PEARLS_CATALOGUE'));
 check('integration capability architecture documented', fs.existsSync(path.join(root,'INTEGRATION_CAPABILITY_ARCHITECTURE.md')));
+check('data-source migration included', schema.includes('create table if not exists public.data_sources') && schema.includes('replace_source_index'));
+check('runtime connector actions audited', schema.includes('connector_action_runs') && text('supabase/functions/_shared/connectors/runtime.ts').includes('insertRun'));
+check('HIPAA/ZDR controls wired', dashboard.includes('hipaa_mode') && text('supabase/functions/_shared/agent.ts').includes('zeroDataRetention'));
+check('MFA gate present', fs.existsSync(path.join(root,'dashboard/src/components/MfaGate.tsx')) && text('supabase/functions/_shared/dashboard.ts').includes('MFA_REQUIRED'));
+check('Shopify GraphQL adapter present', fs.existsSync(path.join(root,'supabase/functions/_shared/integrations/shopify.ts')) && text('supabase/functions/_shared/integrations/shopify.ts').includes('/graphql.json'));
 
 
 // Local relative TS imports must resolve to a file.

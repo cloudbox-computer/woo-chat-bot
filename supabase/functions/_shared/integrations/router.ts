@@ -2,6 +2,7 @@ import type { Tenant } from "../types.ts";
 import { entitlementsForTenant } from "../entitlements.ts";
 import { WooCommerceClient } from "../woo.ts";
 import { SupabaseBusinessDataProvider, SupabaseCatalogueProvider, SupabaseOrdersProvider, type SupabaseCapabilityConfig } from "./supabase.ts";
+import { ShopifyClient } from "./shopify.ts";
 import type { Capability, CapabilityRegistry, IntegrationRouter } from "./types.ts";
 import { CapabilityUnavailableError } from "./types.ts";
 
@@ -65,6 +66,26 @@ export function createIntegrationRouter(tenant: Tenant): IntegrationRouter {
       analytics: (i) => woo.analytics(i),
     };
     ["catalogue.read", "orders.read", "orders.write", "checkout.create", "inventory.read", "analytics.read"].forEach((c) => capabilities.add(c as Capability));
+  }
+
+  if (planAccess.liveIntegrations && tenant.shopifyDomain && tenant.shopifyAdminToken) {
+    const shopify = new ShopifyClient(tenant);
+    if (!registry.catalogue) {
+      registry.catalogue = shopify;
+      capabilities.add("catalogue.read");
+    }
+    if (!registry.orders) {
+      registry.orders = shopify;
+      capabilities.add("orders.read");
+    }
+    if (!registry.reporting) {
+      registry.reporting = shopify;
+      capabilities.add("inventory.read");
+    }
+    if (!registry.checkout && shopify.hasCheckout()) {
+      registry.checkout = shopify;
+      capabilities.add("checkout.create");
+    }
   }
 
   if (planAccess.liveIntegrations && tenant.supabaseUrl && tenant.supabaseAnonKey) {

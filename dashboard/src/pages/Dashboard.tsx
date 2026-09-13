@@ -18,7 +18,7 @@ type Page = "overview" | "chatbot" | "knowledge" | "tickets" | "integrations" | 
 const NAV: Array<{ id: Page; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "chatbot", label: "AI Assistants" },
-  { id: "knowledge", label: "Knowledge" },
+  { id: "knowledge", label: "Data Sources" },
   { id: "tickets", label: "Tickets" },
   { id: "integrations", label: "Integrations" },
   { id: "team", label: "Team" },

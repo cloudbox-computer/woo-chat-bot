@@ -2,6 +2,7 @@ import { json, handleOptions } from "../_shared/cors.ts";
 import { env, supabaseConfig } from "../_shared/env.ts";
 import { decryptSecret } from "../_shared/secrets.ts";
 import { sendTicketEmail } from "../_shared/email.ts";
+import { syncSource } from "../_shared/sources/sync.ts";
 import type { Tenant, Ticket } from "../_shared/types.ts";
 
 function authorised(req:Request){const secret=env("WORKER_SECRET")??"";return !!secret && req.headers.get("x-worker-secret")===secret}
@@ -20,9 +21,12 @@ Deno.serve(async(req:Request)=>{
      const ir=await fetch(`${root}/rest/v1/integrations?tenant_id=eq.${ticket.tenantId}&provider=eq.resend&active=eq.true&select=credentials&limit=1`,{headers:h}); const irows=await ir.json() as Array<Record<string,unknown>>; const creds=(irows[0]?.credentials??{}) as Record<string,unknown>;
      const tenant:Tenant={id:String(tenRows[0].id),slug:String(tenRows[0].slug),name:String(tenRows[0].name),currency:String(tenRows[0].currency??"GBP"),welcomeMessage:"",supportEmail:tenRows[0].support_email?String(tenRows[0].support_email):undefined,ticketPrefix:tenRows[0].ticket_prefix?String(tenRows[0].ticket_prefix):undefined,resendApiKey:await decryptSecret(creds.api_key),resendFromEmail:creds.from_email?String(creds.from_email):undefined,resendFromName:creds.from_name?String(creds.from_name):undefined};
      const sent=await sendTicketEmail(tenant,ticket); if(!sent.sent)throw new Error(sent.error||"Ticket email failed");
+   } else if(kind==="source_sync") {
+     const payload=(job.payload??{}) as Record<string,unknown>; const sourceId=String(payload.sourceId??""); if(!sourceId)throw new Error("sourceId missing");
+     await syncSource(sourceId);
    } else throw new Error(`Unknown job kind: ${kind}`);
-   await fetch(`${root}/rest/v1/background_jobs?id=eq.${id}`,{method:"PATCH",headers:{...h,Prefer:"return=minimal"},body:JSON.stringify({status:"completed",locked_at:null,last_error:null,updated_at:new Date().toISOString()})}); results.push({id,ok:true});
- }catch(e){const message=e instanceof Error?e.message:"Job failed";const dead=attempts>=max;const delayMinutes=Math.min(60,2**Math.max(0,attempts-1));const runAfter=new Date(Date.now()+delayMinutes*60000).toISOString();await fetch(`${root}/rest/v1/background_jobs?id=eq.${id}`,{method:"PATCH",headers:{...h,Prefer:"return=minimal"},body:JSON.stringify({status:dead?"dead":"pending",locked_at:null,last_error:message.slice(0,1000),run_after:runAfter,updated_at:new Date().toISOString()})});results.push({id,ok:false,error:message,dead});}
+   await fetch(`${root}/rest/v1/background_jobs?id=eq.${id}`,{method:"PATCH",headers:{...h,Prefer:"return=minimal"},body:JSON.stringify({status:"completed",locked_at:null,last_error:null,updated_at:new Date().toISOString()})}); results.push({id,kind,ok:true});
+ }catch(e){const message=e instanceof Error?e.message:"Job failed";const dead=attempts>=max;const delayMinutes=Math.min(60,2**Math.max(0,attempts-1));const runAfter=new Date(Date.now()+delayMinutes*60000).toISOString();await fetch(`${root}/rest/v1/background_jobs?id=eq.${id}`,{method:"PATCH",headers:{...h,Prefer:"return=minimal"},body:JSON.stringify({status:dead?"dead":"pending",locked_at:null,last_error:message.slice(0,1000),run_after:runAfter,updated_at:new Date().toISOString()})});results.push({id,kind,ok:false,error:message,dead});}
  }
  return json({ok:true,processed:results.length,results});
 });

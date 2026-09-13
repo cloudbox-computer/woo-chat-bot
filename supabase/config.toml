@@ -47,3 +47,6 @@ verify_jwt = false
 # must be disabled for Stripe's server-to-server callbacks.
 [functions.stripe-webhook]
 verify_jwt = false
+
+[functions.data-sources]
+verify_jwt = true

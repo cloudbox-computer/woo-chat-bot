@@ -9,6 +9,19 @@ export default function AuthPage() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [confirming, setConfirming] = React.useState(false);
+  const [ssoDomain, setSsoDomain] = React.useState("");
+
+  async function signInWithSso() {
+    const domain = ssoDomain.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0];
+    if (!domain || !domain.includes(".")) { setError("Enter your company domain, for example example.com"); return; }
+    setBusy(true); setError(null);
+    try {
+      const redirectTo = `${window.location.origin}/`;
+      const { error } = await supabase.auth.signInWithSSO({ domain, options: { redirectTo } });
+      if (error) throw error;
+    } catch (err) { setError(err instanceof Error ? err.message : "SSO sign-in failed"); }
+    finally { setBusy(false); }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -93,6 +106,14 @@ export default function AuthPage() {
         <button className="btn" style={{ width: "100%" }} disabled={busy}>
           {busy ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
         </button>
+        {mode === "login" ? <>
+          <div className="auth-divider"><span>or use enterprise SSO</span></div>
+          <div className="sso-row">
+            <input type="text" value={ssoDomain} onChange={(e) => setSsoDomain(e.target.value)} placeholder="company.com" autoComplete="organization" />
+            <button type="button" className="btn secondary" disabled={busy} onClick={signInWithSso}>Continue with SSO</button>
+          </div>
+          <p className="hint">Requires a SAML/OIDC SSO provider configured for this domain in Supabase Auth.</p>
+        </> : null}
         <p className="muted" style={{ textAlign: "center", marginTop: 16, fontSize: 13 }}>
           {mode === "login" ? "Don't have an account? " : "Already have an account? "}
           <button

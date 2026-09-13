@@ -7,11 +7,14 @@ import Landing from "./pages/Landing";
 import Onboarding from "./pages/Onboarding";
 import DashboardShell from "./pages/Dashboard";
 import { ToastHost } from "./components/ui";
+import MfaGate from "./components/MfaGate";
 
 type SessionState =
   | { status: "loading" }
   | { status: "signed-out" }
   | { status: "checking-tenant" }
+  | { status: "mfa" }
+  | { status: "blocked"; message: string }
   | { status: "onboarding" }
   | { status: "dashboard" };
 
@@ -91,7 +94,12 @@ export default function App() {
       setState({ status: "dashboard" });
     } catch (err) {
       resolvedRef.current = true;
-      if (err instanceof ApiError && err.status === 403) {
+      if (err instanceof ApiError && err.code === "MFA_REQUIRED") {
+        resolvedRef.current = false;
+        setState({ status: "mfa" });
+      } else if (err instanceof ApiError && err.code === "IP_NOT_ALLOWED") {
+        setState({ status: "blocked", message: err.message || "This network is not allowed to access the workspace." });
+      } else if (err instanceof ApiError && err.status === 403) {
         // A stale/foreign selected tenant must never become the active dashboard
         // context. Clear it so the next refresh resolves from real memberships.
         setSelectedTenantId(null);
@@ -148,6 +156,16 @@ export default function App() {
     saveSelectedTenantId(tenantId);
     resolvedRef.current = false;
     void refresh(tenantId);
+  }
+
+
+
+  if (state.status === "blocked") {
+    return <><div className="auth-wrap"><div className="auth-card"><h1>Access blocked</h1><p className="sub">{state.message}</p><p className="muted">Connect from an approved network or ask the workspace owner to update the dashboard IP allowlist.</p><button className="btn secondary" style={{width:"100%"}} onClick={async()=>{await supabase.auth.signOut();}}>Sign out</button></div></div><ToastHost /></>;
+  }
+
+  if (state.status === "mfa") {
+    return <><MfaGate required onVerified={()=>{resolvedRef.current=false;void refresh(selectedTenantIdRef.current??undefined)}}/><ToastHost /></>;
   }
 
   if (state.status === "onboarding") {
