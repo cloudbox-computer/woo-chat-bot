@@ -381,6 +381,12 @@ export type WidgetInteraction =
       startTime?: string;
       eventName?: string;
       inviteeName?: string;
+    }
+  | {
+      type: "action_result";
+      status: "success" | "error";
+      title: string;
+      message?: string;
     };
 
 export interface WidgetAction {

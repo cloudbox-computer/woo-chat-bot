@@ -50,6 +50,37 @@ function bool(v: unknown): boolean | undefined {
   return undefined;
 }
 
+function imageUrl(v: unknown): string | undefined {
+  if (typeof v === "string") {
+    const trimmed = v.trim();
+    if (!trimmed) return undefined;
+    // Some catalogues store image arrays/objects as JSON strings.
+    if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+      try { return imageUrl(JSON.parse(trimmed)); } catch { /* use as a normal string below */ }
+    }
+    return /^https?:\/\//i.test(trimmed) ? trimmed : undefined;
+  }
+  if (Array.isArray(v)) {
+    for (const item of v) {
+      const found = imageUrl(item);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (v && typeof v === "object") {
+    const row = v as Record<string, unknown>;
+    for (const key of ["url", "src", "publicUrl", "public_url", "imageUrl", "image_url", "thumbnail", "thumbnail_url"]) {
+      const found = imageUrl(row[key]);
+      if (found) return found;
+    }
+    for (const key of ["image", "images", "media", "gallery", "data"]) {
+      const found = imageUrl(row[key]);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
 class SupabaseRest {
   constructor(private url: string, private anonKey: string) {}
 
@@ -107,7 +138,10 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
     const rawDescription = this.pick(row, "description", ["description", "short_description", "summary"]);
     const rawCategory = this.pick(row, "category", ["category", "category_name", "type"]);
     const rawUrl = this.pick(row, "url", ["url", "permalink", "product_url", "link"]);
-    const rawImage = this.pick(row, "image_url", ["image_url", "imageUrl", "image", "featured_image", "thumbnail", "thumbnail_url"]);
+    const rawImage = this.pick(row, "image_url", [
+      "image_url", "imageUrl", "image", "images", "image_urls", "featured_image", "featuredImage",
+      "thumbnail", "thumbnail_url", "gallery", "media"
+    ]);
     const rawStock = this.pick(row, "in_stock", ["in_stock", "available", "is_available", "active", "is_active", "stock_status"]);
     const rawQty = this.pick(row, "stock_quantity", ["stock_quantity", "stock", "quantity", "inventory_quantity"]);
 
@@ -126,7 +160,7 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
       description: str(rawDescription),
       category: str(rawCategory),
       url: str(rawUrl),
-      imageUrl: str(rawImage),
+      imageUrl: imageUrl(rawImage),
       inStock,
       stockQuantity: num(rawQty),
     };

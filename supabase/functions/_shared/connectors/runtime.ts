@@ -328,7 +328,13 @@ export async function executeConnectorAction(opts:{tenantId:string;actionId:stri
     let r=await perform(creds);
     if(r.status===401||r.status===403){const refreshed=await refreshOAuthIfAvailable(action.provider,creds);if(JSON.stringify(refreshed)!==JSON.stringify(creds)){creds=refreshed;await persistRefreshedCredentials(String(integration.id),action.provider,creds,stored);r=await perform(creds)}}
     const raw=await readResponseLimited(r);
-    if(!r.ok){await log(false,r.status,"UPSTREAM_ERROR");return{ok:false,text:`${action.name} failed (${r.status}). ${safeResultText(raw).slice(0,4000)}`}}
+    if(!r.ok){
+      await log(false,r.status,"UPSTREAM_ERROR");
+      const message = r.status >= 500
+        ? "The connected service is temporarily unavailable. Please try again."
+        : "The connected service rejected the request. Please check the details and try again.";
+      return{ok:false,text:`${action.name} could not be completed.`,interaction:{type:"action_result",status:"error",title:`${action.name} failed`,message}}
+    }
     if(action.provider==="calendly"){
       try{
         const data=JSON.parse(raw) as any;
@@ -362,8 +368,22 @@ export async function executeConnectorAction(opts:{tenantId:string;actionId:stri
         }
       }catch{/* fall through to mapped response */}
     }
-    const customerText=action.provider==="calendly"?calendlyCustomerText(path,raw):null;const mapped=mappedResponse(raw,action.response_mapping??{});await log(true,r.status);return{ok:true,text:customerText??`${action.name} succeeded.\n${safeResultText(mapped)||"No response body."}`}
+    const customerText=action.provider==="calendly"?calendlyCustomerText(path,raw):null;
+    const mapped=mappedResponse(raw,action.response_mapping??{});
+    await log(true,r.status);
+    // Mutating actions often return provider JSON containing IDs and internal
+    // metadata. Never dump that raw payload into the customer chat. Show a
+    // polished result state instead; the full response remains server-side.
+    if(action.method!=="GET"){
+      return{ok:true,text:`${action.name} completed successfully.`,interaction:{type:"action_result",status:"success",title:`${action.name} complete`,message:"Done successfully."}}
+    }
+    return{ok:true,text:customerText??(safeResultText(mapped)||`${action.name} completed successfully.`)}
 
-  }catch(e){const code=e instanceof DOMException&&e.name==="AbortError"?"TIMEOUT":"REQUEST_ERROR";await log(false,undefined,code);return{ok:false,text:`${action.name} failed: ${e instanceof Error?e.message:"request error"}`}}
+  }catch(e){
+    const code=e instanceof DOMException&&e.name==="AbortError"?"TIMEOUT":"REQUEST_ERROR";
+    await log(false,undefined,code);
+    const message=code==="TIMEOUT"?"The connected service took too long to respond. Please try again.":"The action could not be completed. Please try again.";
+    return{ok:false,text:`${action.name} could not be completed.`,interaction:{type:"action_result",status:"error",title:`${action.name} failed`,message}}
+  }
 }
 

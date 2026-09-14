@@ -27,7 +27,8 @@ type WidgetInteraction =
   | { type: "appointment_picker"; title: string; description?: string; eventType: { uri: string; name: string; duration?: number }; slots: Array<{ startTime: string }> }
   | { type: "action_form"; title: string; description?: string; actionId: string; actionName: string; schema: Record<string, unknown>; values?: Record<string, unknown>; submitLabel?: string; requireConfirmation?: boolean }
   | { type: "action_confirmation"; title: string; description?: string; actionId: string; actionName: string; input: Record<string, unknown>; confirmLabel?: string }
-  | { type: "booking_confirmation"; title: string; startTime?: string; eventName?: string; inviteeName?: string };
+  | { type: "booking_confirmation"; title: string; startTime?: string; eventName?: string; inviteeName?: string }
+  | { type: "action_result"; status: "success" | "error"; title: string; message?: string };
 
 type WidgetAction = {
   type: "calendly_event_type_selected" | "calendly_book" | "connector_action_submit" | "connector_action_confirm";
@@ -230,6 +231,20 @@ function InteractionCard({ interaction, brand, brandTextColor, defaultEmail, dis
         <button disabled={disabled||!name.trim()||!email.trim()} style={{...primary,width:"100%",opacity:(!name.trim()||!email.trim()) ? .45 : 1}} onClick={()=>onAction(`Book ${interaction.eventType.name} · ${formatAppointmentDate(slot)} at ${formatAppointmentTime(slot)}`,{type:"calendly_book",payload:{eventTypeUri:interaction.eventType.uri,eventTypeName:interaction.eventType.name,startTime:slot,name:name.trim(),email:email.trim(),timezone:zone}})}>Confirm booking</button>
         <div style={{fontSize:10.5,color:COLORS.muted,textAlign:"center",lineHeight:1.45}}>Nothing is booked until you press Confirm booking.</div>
       </div>:null}
+    </div>;
+  }
+
+  if (interaction.type === "action_result") {
+    const success = interaction.status === "success";
+    return <div className={`zochat-action-result ${success ? "is-success" : "is-error"}`} style={{...base,padding:"18px 16px",display:"grid",placeItems:"center",textAlign:"center",gap:10}}>
+      <div className="zochat-result-icon" aria-hidden="true" style={{width:52,height:52,borderRadius:999,display:"grid",placeItems:"center",background:success?"#e8f8ef":"#fff0ef",color:success?"#16824b":"#c0392b",boxShadow:success?"0 10px 28px rgba(22,130,75,.16)":"0 10px 28px rgba(192,57,43,.14)"}}>
+        {success ? (
+          <svg viewBox="0 0 48 48" width="30" height="30" fill="none"><path className="zochat-result-path" d="M13 25.5 21 33l14-18" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        ) : (
+          <svg viewBox="0 0 48 48" width="28" height="28" fill="none"><path className="zochat-result-path" d="m15 15 18 18M33 15 15 33" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round"/></svg>
+        )}
+      </div>
+      <div><div style={{fontSize:14.5,fontWeight:850,color:COLORS.fg}}>{interaction.title}</div>{interaction.message?<div style={{fontSize:12.5,color:COLORS.muted,marginTop:4,lineHeight:1.45}}>{interaction.message}</div>:null}</div>
     </div>;
   }
 
@@ -696,6 +711,12 @@ export function Widget({ config }: { config: WidgetConfig }) {
     .zochat-header-glow { position:absolute; width:150px; height:150px; border-radius:50%; right:-72px; top:-95px; background:rgba(255,255,255,.13); pointer-events:none; }
     .zochat-message { animation:zochatMessageIn .28s cubic-bezier(.2,.8,.2,1) both; }
     .zochat-chip, .zochat-product-btn, .zochat-close, .zochat-send, .zochat-feedback-btn { transition:transform .16s ease, filter .16s ease, background .16s ease, box-shadow .16s ease; }
+    .zochat-action-result { animation:zochat-result-in .34s cubic-bezier(.2,.9,.25,1) both; }
+    .zochat-result-icon { animation:zochat-result-pop .5s cubic-bezier(.18,.89,.32,1.28) both; }
+    .zochat-result-path { stroke-dasharray:60; stroke-dashoffset:60; animation:zochat-result-draw .42s .16s ease-out forwards; }
+    @keyframes zochat-result-in { from { opacity:0; transform:translateY(7px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
+    @keyframes zochat-result-pop { 0% { transform:scale(.55); opacity:0; } 70% { transform:scale(1.08); opacity:1; } 100% { transform:scale(1); opacity:1; } }
+    @keyframes zochat-result-draw { to { stroke-dashoffset:0; } }
     .zochat-chip:hover { transform:translateY(-1px); background:${hexToRgba(brand, .15)}; }
     .zochat-product-btn:hover, .zochat-send:hover:not(:disabled) { transform:translateY(-1px); filter:brightness(.96); }
     .zochat-close:hover { background:rgba(255,255,255,.20) !important; transform:rotate(3deg); }
@@ -734,7 +755,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
       .zochat-root { right:14px !important; bottom:14px !important; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .zochat-panel,.zochat-launcher,.zochat-message,.zochat-chip,.zochat-product-btn,.zochat-close,.zochat-send,.zochat-feedback-btn { animation:none !important; transition:none !important; }
+      .zochat-panel,.zochat-launcher,.zochat-message,.zochat-chip,.zochat-product-btn,.zochat-close,.zochat-send,.zochat-feedback-btn,.zochat-action-result,.zochat-result-icon,.zochat-result-path { animation:none !important; transition:none !important; stroke-dashoffset:0 !important; }
       .zochat-launcher::before,.zochat-spark,.zochat-dot { animation:none !important; }
     }
   `;
@@ -800,7 +821,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
               nodes.push(
                 <div key={i} className="zochat-message">
                   {m.role === "assistant" ? (
-                    !productListing && (
+                    !productListing && m.interaction?.type !== "action_result" && (
                       <div style={{ ...s.bubble, ...(m.error ? s.error : s.assistant) }}>
                         <Markdown>{m.content}</Markdown>
                       </div>
@@ -810,7 +831,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
                   )}
                   {m.products?.map((p) => (
                     <div key={String(p.id)} style={{ ...s.card, marginTop: productListing ? 0 : 8 }}>
-                      {p.imageUrl ? <img src={p.imageUrl} alt={p.name} style={s.cardImg} /> : null}
+                      {p.imageUrl ? <img className="zochat-product-image" src={p.imageUrl} alt={p.name} loading="lazy" style={s.cardImg} onError={(e)=>{e.currentTarget.style.display="none"}} /> : <div className="zochat-product-image-placeholder" style={{...s.cardImg,display:"grid",placeItems:"center",fontSize:18,color:COLORS.muted,background:"#f7f7f5"}}>◇</div>}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <p style={s.cardName}>{p.name}</p>
                         <p style={s.cardPrice}>{sym(p.currency)}{p.price.toFixed(2)}</p>
