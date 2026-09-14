@@ -65,6 +65,8 @@ check('integration preset UI present', text('dashboard/src/pages/Integrations.ts
 check('clean per-action AI tools', connectorRuntime.includes('connectorActionTools') && text('supabase/functions/_shared/agent.ts').includes('connectorModel.bindings'));
 check('customer-safe writes available to normal assistants', connectorRuntime.includes('isCustomerSafeBuiltInWrite') && text('supabase/functions/_shared/agent.ts').includes('canSafeCustomerWriteActions'));
 check('assistant-scoped connector actions', schema.includes('connector_action_chatbots') && connectorRuntime.includes('chatbotId') && text('dashboard/src/pages/Integrations.tsx').includes('Available to assistants'));
+check('restricted writes require explicit per-assistant grant', connectorRuntime.includes('restrictedWriteGrants') && connectorRuntime.includes('allow_restricted_write') && text('dashboard/src/pages/Integrations.tsx').includes('Allow restricted write action'));
+check('restricted grants fail closed', connectorRuntime.includes('Restricted writes still fail closed') && text('supabase/migrations/20260914023000_connector_action_restricted_permissions.sql').includes('default false'));
 check('connected capability prompt awareness', text('supabase/functions/_shared/agent.ts').includes('CONNECTED CAPABILITIES AVAILABLE NOW'));
 check('built-in action backfill on runtime', connectorRuntime.includes('ensureTenantDefaultConnectorActions'));
 

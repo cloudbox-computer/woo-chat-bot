@@ -2072,3 +2072,9 @@ tbody tr:hover { background:rgba(255,255,255,.018); }
 
 /* Built-in integration actions: keep developer controls out of the main flow. */
 .advanced-actions{margin-top:14px;border-top:1px solid var(--border);padding-top:12px}.advanced-actions summary{cursor:pointer;font-weight:650;color:var(--muted);list-style:none}.advanced-actions summary::-webkit-details-marker{display:none}.advanced-actions summary::before{content:"›";display:inline-block;margin-right:8px;transition:transform .18s ease}.advanced-actions[open] summary::before{transform:rotate(90deg)}.advanced-actions p{margin:8px 0 10px}
+
+/* Per-assistant connector action permissions */
+.assistant-action-permission{border:1px solid var(--border,#2a3444);border-radius:12px;padding:8px 10px;margin-bottom:8px;background:rgba(255,255,255,.015)}
+.assistant-action-permission>.check-row{border:0;padding:4px 2px}
+.restricted-action-row{margin:6px 0 0 28px;padding:8px 10px!important;border:1px solid rgba(245,158,11,.28)!important;border-radius:10px;background:rgba(245,158,11,.06)}
+.restricted-action-row small{display:block;margin-top:2px}

@@ -55,23 +55,31 @@ export async function listRuntimeActions(tenantId:string,chatbotId:string,access
   // assistants. Once an action has one or more mappings, only those assistants
   // receive it. This preserves existing tenants while enabling strict scoping.
   let scoped=actions;
+  const restrictedWriteGrants=new Set<string>();
   if(actions.length){
     const ids=actions.map(a=>a.id).join(",");
     try{
-      const mappings=await getRows("connector_action_chatbots",{tenant_id:`eq.${tenantId}`,action_id:`in.(${ids})`,select:"action_id,chatbot_id",limit:"1000"});
+      const mappings=await getRows("connector_action_chatbots",{tenant_id:`eq.${tenantId}`,action_id:`in.(${ids})`,select:"action_id,chatbot_id,allow_restricted_write",limit:"1000"});
       const anyByAction=new Set(mappings.map(m=>String(m.action_id)));
-      const mine=new Set(mappings.filter(m=>String(m.chatbot_id)===chatbotId).map(m=>String(m.action_id)));
+      const mineRows=mappings.filter(m=>String(m.chatbot_id)===chatbotId);
+      const mine=new Set(mineRows.map(m=>String(m.action_id)));
+      for(const m of mineRows){if(m.allow_restricted_write===true)restrictedWriteGrants.add(String(m.action_id))}
       scoped=actions.filter(a=>!anyByAction.has(a.id)||mine.has(a.id));
     }catch(e){
-      // During a rolling deploy the migration may not exist yet. Fail open to
-      // legacy tenant-wide visibility rather than taking chat offline.
+      // During a rolling deploy the migration may not exist yet. Fail open only
+      // for legacy visibility. Restricted writes still fail closed because no
+      // explicit grant is present.
       console.warn("connector:assistant-scope-read-failed",{tenantId,chatbotId,error:e instanceof Error?e.message:String(e)});
     }
   }
   return scoped.filter(action=>{
     if(isReadLike(action))return access.read;
     if(access.privilegedWrites)return true;
-    return access.safeCustomerWrites && isCustomerSafeBuiltInWrite(action);
+    if(access.safeCustomerWrites && isCustomerSafeBuiltInWrite(action))return true;
+    // Restricted writes (email, SMS, publishing, automation, etc.) are available
+    // to a normal customer-facing assistant only after an admin explicitly grants
+    // this exact action to this exact assistant.
+    return restrictedWriteGrants.has(action.id);
   });
 }
 

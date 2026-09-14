@@ -1,7 +1,8 @@
 create table if not exists public.connector_action_chatbots (
   tenant_id uuid not null references public.tenants(id) on delete cascade,
   action_id uuid not null references public.connector_actions(id) on delete cascade,
-  chatbot_id uuid not null references public.chatbots(id) on delete cascade,
+  chatbot_id text not null references public.chatbots(id) on delete cascade,
+  allow_restricted_write boolean not null default false,
   created_at timestamptz not null default now(),
   primary key (action_id, chatbot_id)
 );

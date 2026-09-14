@@ -406,7 +406,7 @@ export interface ConnectorItem {
   configured:boolean; active:boolean; credentials:Record<string,unknown>; oauthAvailable?:boolean;
   health?:{provider:string;status:string;message?:string|null;checked_at?:string|null;latency_ms?:number|null}|null;
 }
-export interface ConnectorActionItem { id:string; provider:string; name:string; description:string; capability:string; method:string; path_template:string; request_schema:Record<string,unknown>; response_mapping:Record<string,unknown>; require_confirmation:boolean; active:boolean; created_at:string; chatbot_ids?:string[]; }
+export interface ConnectorActionItem { id:string; provider:string; name:string; description:string; capability:string; method:string; path_template:string; request_schema:Record<string,unknown>; response_mapping:Record<string,unknown>; require_confirmation:boolean; active:boolean; created_at:string; chatbot_ids?:string[]; restricted_chatbot_ids?:string[]; }
 
 function sourceQuery(tenantId:string,action:string,extra?:Record<string,string>){const q=new URLSearchParams({tenantId,action,...(extra??{})});return `/data-sources?${q.toString()}`;}
 export function listDataSources(tenantId:string,chatbotId?:string){return request<{items:DataSourceItem[]}>(sourceQuery(tenantId,"sources",chatbotId?{chatbotId}:undefined));}

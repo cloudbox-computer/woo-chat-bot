@@ -49,12 +49,12 @@ async function listActions(ctx:Awaited<ReturnType<typeof resolveDashboardContext
   await Promise.all(connected.map(x=>ensureDefaultConnectorActions(ctx.tenantId,String(x.provider)).catch(e=>console.warn("default actions seed failed",{provider:x.provider,error:e instanceof Error?e.message:String(e)}))));
   const [items,mappings,assistants]=await Promise.all([
     rows("connector_actions",{tenant_id:`eq.${ctx.tenantId}`,select:"*",order:"created_at.desc",limit:"500"}),
-    rows("connector_action_chatbots",{tenant_id:`eq.${ctx.tenantId}`,select:"action_id,chatbot_id",limit:"2000"}).catch(()=>[]),
+    rows("connector_action_chatbots",{tenant_id:`eq.${ctx.tenantId}`,select:"action_id,chatbot_id,allow_restricted_write",limit:"2000"}).catch(()=>[]),
     rows("chatbots",{tenant_id:`eq.${ctx.tenantId}`,select:"id,name,active",order:"created_at.asc",limit:"100"}),
   ]);
-  const byAction=new Map<string,string[]>();
-  for(const m of mappings){const id=String(m.action_id);const arr=byAction.get(id)??[];arr.push(String(m.chatbot_id));byAction.set(id,arr)}
-  return json({items:items.map(i=>({...i,chatbot_ids:byAction.get(String(i.id))??[]})),assistants});
+  const byAction=new Map<string,string[]>();const restrictedByAction=new Map<string,string[]>();
+  for(const m of mappings){const id=String(m.action_id);const botId=String(m.chatbot_id);const arr=byAction.get(id)??[];arr.push(botId);byAction.set(id,arr);if(m.allow_restricted_write===true){const r=restrictedByAction.get(id)??[];r.push(botId);restrictedByAction.set(id,r)}}
+  return json({items:items.map(i=>({...i,chatbot_ids:byAction.get(String(i.id))??[],restricted_chatbot_ids:restrictedByAction.get(String(i.id))??[]})),assistants});
 }
 async function saveAction(ctx:Awaited<ReturnType<typeof resolveDashboardContext>>,req:Request,url:URL){
   requirePlanFeature(ctx.tenant,"liveIntegrations");requireDashboardRole(ctx,"admin");
@@ -68,18 +68,20 @@ async function saveAction(ctx:Awaited<ReturnType<typeof resolveDashboardContext>
   const forcedConfirmation=method==="DELETE"||/refund|payment|delete|cancel/i.test(String(b.capability??"")+" "+name);
   const row={tenant_id:ctx.tenantId,provider,name,description:cleanName(b.description,500),capability:cleanName(b.capability,120)||"custom.read",method,path_template:path,request_schema:schema,response_mapping:mapping,require_confirmation:forcedConfirmation||b.requireConfirmation!==false,active:b.active!==false,updated_at:new Date().toISOString()};
   const existing=await rows("connector_actions",{id:`eq.${id}`,tenant_id:`eq.${ctx.tenantId}`,select:"id",limit:"1"});if(existing[0])await write("PATCH",`connector_actions?id=eq.${id}&tenant_id=eq.${ctx.tenantId}`,row);else await write("POST","connector_actions",{id,...row,created_by:ctx.user.id});
-  // Empty chatbotIds means "All assistants". Non-empty ids are validated and
-  // stored as an explicit allow-list for this action.
+  // Empty chatbotIds means "All assistants" for ordinary visibility. Restricted
+  // writes are different: they always require an explicit per-assistant grant.
   if(Array.isArray(b.chatbotIds)){
     const requested=[...new Set(b.chatbotIds.map(x=>String(x).trim()).filter(Boolean))];
+    const restrictedRequested=Array.isArray(b.restrictedChatbotIds)?[...new Set(b.restrictedChatbotIds.map(x=>String(x).trim()).filter(Boolean))]:[];
+    for(const botId of restrictedRequested){if(!requested.includes(botId))throw new DashboardError("Restricted action permission requires the assistant to be selected for this action",400)}
     if(requested.length){
       const valid=await rows("chatbots",{tenant_id:`eq.${ctx.tenantId}`,id:`in.(${requested.join(",")})`,select:"id",limit:"100"});
       if(valid.length!==requested.length)throw new DashboardError("One or more selected assistants are invalid",400);
     }
     await write("DELETE",`connector_action_chatbots?tenant_id=eq.${ctx.tenantId}&action_id=eq.${id}`,{}).catch(()=>undefined);
-    for(const chatbotId of requested)await write("POST","connector_action_chatbots",{tenant_id:ctx.tenantId,action_id:id,chatbot_id:chatbotId}).catch(()=>undefined);
+    for(const chatbotId of requested)await write("POST","connector_action_chatbots",{tenant_id:ctx.tenantId,action_id:id,chatbot_id:chatbotId,allow_restricted_write:restrictedRequested.includes(chatbotId)});
   }
-  await audit(ctx,"connector_action.updated","connector_action",id,{provider,name,assistantScope:Array.isArray(b.chatbotIds)?b.chatbotIds:"all"});return json({ok:true,id});
+  await audit(ctx,"connector_action.updated","connector_action",id,{provider,name,assistantScope:Array.isArray(b.chatbotIds)?b.chatbotIds:"all",restrictedAssistantScope:Array.isArray(b.restrictedChatbotIds)?b.restrictedChatbotIds:[]});return json({ok:true,id});
 }
 async function deleteAction(ctx:Awaited<ReturnType<typeof resolveDashboardContext>>,url:URL){requirePlanFeature(ctx.tenant,"liveIntegrations");requireDashboardRole(ctx,"admin");const id=url.searchParams.get("id");if(!id)throw new DashboardError("id required");await write("DELETE",`connector_actions?id=eq.${id}&tenant_id=eq.${ctx.tenantId}`,{});await audit(ctx,"connector_action.deleted","connector_action",id);return json({ok:true})}
 
