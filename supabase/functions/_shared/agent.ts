@@ -402,6 +402,26 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // deterministically, so if the model still refuses, nudge it once (bounded).
   let storeInfoRefusalRetried = false;
 
+  // Compound catalogue + email requests need authoritative product data before
+  // the model can compose the outbound message. Prefetch the catalogue first
+  // when this assistant has both capabilities, then let the model compose and
+  // invoke the restricted email action with a complete payload.
+  const hasSendEmailAction = Array.from(connectorModel.bindings.values()).some((a) => a.capability === "email.send");
+  if (isProductEmailRequest(req.message) && hasSendEmailAction && allowed.has("search_products")) {
+    const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail, currentUserMessage: req.message, auditConversationId: persistConversation ? conversationId : undefined };
+    agentTrace(req.requestId, "tool:start", agentStartedAt, { tool: "search_products", toolTurn: 1, direct: true, reason: "product-email-prefetch" });
+    const toolStartedAt = Date.now();
+    const toolResult = await executeTool("search_products", {}, ctx);
+    agentTrace(req.requestId, "tool:done", agentStartedAt, { tool: "search_products", toolTurn: 1, direct: true, reason: "product-email-prefetch", toolElapsedMs: Date.now() - toolStartedAt, ok: toolResult.ok });
+    if (toolResult.ok) {
+      toolTurns = 1;
+      deterministicRouted = true;
+      if (toolResult.products?.length) products.push(...toolResult.products);
+      transcript.push({ role: "assistant", content: "tool:search_products:{}" });
+      transcript.push({ role: "user", content: `Authoritative product catalogue retrieved for the requested email:\n${toolResult.text}\n\nCompose the email yourself and use the send-email capability. ${knownEmail ? `The recipient supplied by the customer is ${knownEmail}.` : "Use the recipient supplied by the customer in their message, or ask only for the email address if none was supplied."} Do not ask the customer to provide a subject, body, HTML, sender or other technical fields.` });
+    }
+  }
+
   // Common scheduling intents are deterministic. If Calendly is connected,
   // don't spend a full model round-trip merely to discover the obvious
   // read-only action. This makes "what meetings can I book?" fast.
@@ -445,8 +465,16 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
         const toolStartedAt = Date.now();
         agentTrace(req.requestId, "tool:start", agentStartedAt, { tool: call.name, toolTurn: toolTurns });
         const boundAction = connectorModel.bindings.get(call.name);
+        let connectorInput = (call.arguments ?? {}) as Record<string, unknown>;
+        if (boundAction?.capability === "email.send") {
+          connectorInput = { ...connectorInput };
+          const currentTo = connectorInput.to;
+          if (knownEmail && (!Array.isArray(currentTo) || currentTo.length === 0)) connectorInput.to = [knownEmail];
+          // The sender is workspace configuration, never customer/model input.
+          delete connectorInput.from;
+        }
         const toolResult = boundAction
-          ? await executeConnectorAction({ tenantId: tenant.id, actionId: boundAction.id, input: call.arguments ?? {}, confirmed: false, userMessage: req.message, conversationId: persistConversation ? conversationId : undefined })
+          ? await executeConnectorAction({ tenantId: tenant.id, actionId: boundAction.id, input: connectorInput, confirmed: false, userMessage: req.message, conversationId: persistConversation ? conversationId : undefined })
           : await executeTool(call.name, call.arguments, ctx);
         agentTrace(req.requestId, "tool:done", agentStartedAt, { tool: call.name, toolTurn: toolTurns, toolElapsedMs: Date.now() - toolStartedAt, connectorAction: Boolean(boundAction) });
         if (toolResult.interaction) {
@@ -631,6 +659,7 @@ function buildSystemPrompt(
     "- Before saying an integration-backed task is unavailable, check the tools you have been given for this request.",
     "- When a tool needs missing customer input, ask only for the missing fields. If the tool returns an in-chat form or picker, present that interaction instead of asking the customer to understand technical fields.",
     "- When a mutation requires confirmation, never claim it is complete until the confirmed tool execution succeeds.",
+    "- For outbound email requests, compose the subject and full message body yourself from the customer request and authoritative tool results. Never ask the customer to fill in sender, HTML, body or other technical email fields. If the request depends on catalogue/order/CRM data, retrieve that data first, then call the email action with a complete payload.",
     "- Use search_knowledge for tenant-provided facts and guidance.",
     "- Use search_website only for the tenant's own website. Never browse or cite unrelated websites.",
     "- If a tool returns nothing, say so honestly rather than inventing an answer.",
@@ -734,6 +763,13 @@ function detectDeterministicConnectorAction(message:string,actions:Array<{id:str
     }
   }
   return null;
+}
+
+function isProductEmailRequest(message:string):boolean{
+  const m=message.toLowerCase();
+  const wantsEmail=/\b(email|e-mail|mail|send)\b/.test(m);
+  const wantsProducts=/\b(products?|catalogue|catalog|range|collection|items?)\b/.test(m);
+  return wantsEmail&&wantsProducts;
 }
 
 function detectDeterministicTool(message: string, toolNames: Set<string>) {
