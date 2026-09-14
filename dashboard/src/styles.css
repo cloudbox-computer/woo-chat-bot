@@ -2078,3 +2078,41 @@ tbody tr:hover { background:rgba(255,255,255,.018); }
 .assistant-action-permission>.check-row{border:0;padding:4px 2px}
 .restricted-action-row{margin:6px 0 0 28px;padding:8px 10px!important;border:1px solid rgba(245,158,11,.28)!important;border-radius:10px;background:rgba(245,158,11,.06)}
 .restricted-action-row small{display:block;margin-top:2px}
+
+/* --------------------------------------------------------------------------
+   Landing page contrast isolation
+   The authenticated dashboard intentionally uses global light-on-dark heading
+   colours later in this stylesheet. Keep those dashboard rules from leaking
+   into the public light landing page.
+   -------------------------------------------------------------------------- */
+.landing h1,
+.landing h2,
+.landing h3,
+.landing h4 {
+  color: var(--ink);
+}
+
+.landing .lp-dark h1,
+.landing .lp-dark h2,
+.landing .lp-dark h3,
+.landing .lp-dark h4 {
+  color: #eef5f1;
+}
+
+/* Explicitly preserve readable text on the intentionally light surfaces. */
+.landing .lp-hero h1,
+.landing .lp-section h2,
+.landing .lp-integrations h2,
+.landing .lp-pricing h2,
+.landing .lp-answer-section h2,
+.landing .lp-faq h2,
+.landing .lp-final h2,
+.landing .lp-feature-grid h3,
+.landing .lp-price-grid h3,
+.landing .lp-dashhead h3 {
+  color: var(--ink);
+}
+
+.landing .lp-dark .lp-steps h3 {
+  color: #eef5f1;
+}
