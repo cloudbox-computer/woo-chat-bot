@@ -2116,3 +2116,15 @@ tbody tr:hover { background:rgba(255,255,255,.018); }
 .landing .lp-dark .lp-steps h3 {
   color: #eef5f1;
 }
+
+/* Connected integration action catalogue */
+.integration-action-groups{display:grid;gap:16px;margin-top:16px}
+.integration-action-group{border:1px solid var(--line,#e5e7eb);border-radius:16px;padding:16px;background:var(--card,#fff)}
+.integration-action-group-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
+.integration-action-group-head>div{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.integration-action-group-head span{font-size:12px;color:var(--muted,#6b7280)}
+.native-action-card{cursor:default;text-align:left}
+.native-action-card small,.preset-button small{display:block;margin-top:6px;color:var(--muted,#6b7280);font-size:12px;line-height:1.45}
+.integration-action-empty{border:1px dashed var(--line,#d1d5db);border-radius:12px;padding:14px;display:grid;gap:4px;color:var(--muted,#6b7280)}
+.integration-action-empty small{font-size:12px}
+@media(max-width:720px){.integration-action-group{padding:12px}.integration-action-group-head{align-items:flex-start}}

@@ -404,8 +404,9 @@ export interface DataSourceItem {
 export interface SourceDocumentItem { id:string; external_id:string; title:string; source_url?:string|null; mime_type?:string|null; byte_size?:number|null; metadata?:Record<string,unknown>; indexed_at:string; }
 export interface ConnectorField { key:string; label:string; secret?:boolean; required?:boolean; placeholder?:string; type?:"text"|"url"|"textarea"; }
 export interface ConnectorActionTemplate { id:string; name:string; description:string; capability:string; method:string; pathTemplate:string; requestSchema:Record<string,unknown>; responseMapping?:Record<string,unknown>; requireConfirmation?:boolean; }
+export interface ConnectorNativeAction { id:string; name:string; description:string; capability:string; toolName:string; native:true; }
 export interface ConnectorItem {
-  id:string; name:string; category:string; capabilities:string[]; sourceKinds?:string[]; fields:ConnectorField[]; docsUrl?:string; actionTemplates?:ConnectorActionTemplate[];
+  id:string; name:string; category:string; capabilities:string[]; sourceKinds?:string[]; fields:ConnectorField[]; docsUrl?:string; actionTemplates?:ConnectorActionTemplate[]; nativeActions?:ConnectorNativeAction[];
   configured:boolean; active:boolean; credentials:Record<string,unknown>; oauthAvailable?:boolean;
   health?:{provider:string;status:string;message?:string|null;checked_at?:string|null;latency_ms?:number|null}|null;
 }
