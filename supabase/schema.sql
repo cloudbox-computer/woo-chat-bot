@@ -1022,6 +1022,16 @@ create table if not exists public.connector_actions (
 create index if not exists connector_actions_tenant_idx on public.connector_actions(tenant_id, provider);
 alter table public.connector_actions enable row level security;
 
+create table if not exists public.connector_action_chatbots (
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  action_id uuid not null references public.connector_actions(id) on delete cascade,
+  chatbot_id uuid not null references public.chatbots(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (action_id, chatbot_id)
+);
+create index if not exists connector_action_chatbots_tenant_idx on public.connector_action_chatbots(tenant_id, chatbot_id);
+alter table public.connector_action_chatbots enable row level security;
+
 create table if not exists public.connector_action_runs (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references public.tenants(id) on delete cascade,
@@ -1094,6 +1104,8 @@ do $$ begin
     execute 'create policy source_chunks_member_read on public.source_chunks for select to authenticated using (public.has_tenant_role(tenant_id, array[''owner'',''admin'',''agent'',''viewer'']))';
     execute 'drop policy if exists connector_actions_member_read on public.connector_actions';
     execute 'create policy connector_actions_member_read on public.connector_actions for select to authenticated using (public.has_tenant_role(tenant_id, array[''owner'',''admin'',''agent'',''viewer'']))';
+    execute 'drop policy if exists connector_action_chatbots_member_read on public.connector_action_chatbots';
+    execute 'create policy connector_action_chatbots_member_read on public.connector_action_chatbots for select to authenticated using (public.has_tenant_role(tenant_id, array[''owner'',''admin'',''agent'',''viewer'']))';
     execute 'drop policy if exists connector_action_runs_admin_read on public.connector_action_runs';
     execute 'create policy connector_action_runs_admin_read on public.connector_action_runs for select to authenticated using (public.has_tenant_role(tenant_id, array[''owner'',''admin'']))';
     execute 'drop policy if exists consent_records_admin_read on public.consent_records';

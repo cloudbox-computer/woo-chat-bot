@@ -1,7 +1,8 @@
 import type { ToolSpec } from "../ai.ts";
 import type { WidgetInteraction } from "../types.ts";
 import { supabaseConfig } from "../env.ts";
-import { decryptedCredentials, encryptCredentials } from "./registry.ts";
+import { actionTemplateFor, decryptedCredentials, encryptCredentials, isBuiltInAction } from "./registry.ts";
+import { ensureTenantDefaultConnectorActions } from "./default-actions.ts";
 
 export interface RuntimeConnectorAction {
   id: string;
@@ -22,15 +23,101 @@ function config(){const {url,serviceRoleKey}=supabaseConfig();return{base:`${url
 async function getRows(path:string,qs:Record<string,string>):Promise<Record<string,unknown>[]>{const c=config();const r=await fetch(`${c.base}/${path}?${new URLSearchParams(qs)}`,{headers:c.h});if(!r.ok)throw new Error(`Connector database read failed (${r.status})`);return r.json()}
 async function insertRun(row:Record<string,unknown>):Promise<void>{const c=config();try{await fetch(`${c.base}/connector_action_runs`,{method:"POST",headers:{...c.h,"Content-Type":"application/json",Prefer:"return=minimal"},body:JSON.stringify(row)})}catch{/* action telemetry must never break the customer request */}}
 
-export async function listRuntimeActions(tenantId:string,allowWrites:boolean):Promise<RuntimeConnectorAction[]>{
-  const rows=await getRows("connector_actions",{tenant_id:`eq.${tenantId}`,active:"eq.true",select:"id,tenant_id,provider,name,description,capability,method,path_template,request_schema,response_mapping,require_confirmation,active",order:"name.asc",limit:"100"});
-  return rows.map(r=>r as unknown as RuntimeConnectorAction).filter(a=>allowWrites||a.method==="GET");
+export interface RuntimeActionAccess {
+  read: boolean;
+  safeCustomerWrites: boolean;
+  privilegedWrites: boolean;
 }
 
+const actionSeedCache = new Map<string, number>();
+async function ensureActionCatalogueFresh(tenantId:string){
+  const now=Date.now();
+  if((actionSeedCache.get(tenantId)??0)>now-10*60_000)return;
+  actionSeedCache.set(tenantId,now);
+  try{await ensureTenantDefaultConnectorActions(tenantId)}catch(e){console.warn("connector:default-action-backfill-failed",{tenantId,error:e instanceof Error?e.message:String(e)})}
+}
+
+function isReadLike(action:RuntimeConnectorAction):boolean{
+  return action.method==="GET" || action.capability.endsWith(".read") || action.capability==="knowledge.read";
+}
+
+function isCustomerSafeBuiltInWrite(action:RuntimeConnectorAction):boolean{
+  if(isReadLike(action))return false;
+  const t=actionTemplateFor(action.provider,action.name);
+  return Boolean(t?.customerSafe && isBuiltInAction(action.provider,action.name,action.method,action.path_template));
+}
+
+export async function listRuntimeActions(tenantId:string,chatbotId:string,access:RuntimeActionAccess):Promise<RuntimeConnectorAction[]>{
+  await ensureActionCatalogueFresh(tenantId);
+  const rows=await getRows("connector_actions",{tenant_id:`eq.${tenantId}`,active:"eq.true",select:"id,tenant_id,provider,name,description,capability,method,path_template,request_schema,response_mapping,require_confirmation,active",order:"name.asc",limit:"200"});
+  const actions=rows.map(r=>r as unknown as RuntimeConnectorAction);
+  // Assignment is opt-in: no mapping rows means an action is available to all
+  // assistants. Once an action has one or more mappings, only those assistants
+  // receive it. This preserves existing tenants while enabling strict scoping.
+  let scoped=actions;
+  if(actions.length){
+    const ids=actions.map(a=>a.id).join(",");
+    try{
+      const mappings=await getRows("connector_action_chatbots",{tenant_id:`eq.${tenantId}`,action_id:`in.(${ids})`,select:"action_id,chatbot_id",limit:"1000"});
+      const anyByAction=new Set(mappings.map(m=>String(m.action_id)));
+      const mine=new Set(mappings.filter(m=>String(m.chatbot_id)===chatbotId).map(m=>String(m.action_id)));
+      scoped=actions.filter(a=>!anyByAction.has(a.id)||mine.has(a.id));
+    }catch(e){
+      // During a rolling deploy the migration may not exist yet. Fail open to
+      // legacy tenant-wide visibility rather than taking chat offline.
+      console.warn("connector:assistant-scope-read-failed",{tenantId,chatbotId,error:e instanceof Error?e.message:String(e)});
+    }
+  }
+  return scoped.filter(action=>{
+    if(isReadLike(action))return access.read;
+    if(access.privilegedWrites)return true;
+    return access.safeCustomerWrites && isCustomerSafeBuiltInWrite(action);
+  });
+}
+
+function slug(v:string):string{return v.toLowerCase().replace(/[^a-z0-9_]+/g,"_").replace(/^_+|_+$/g,"").slice(0,48)||"action"}
+function semanticToolBase(action:RuntimeConnectorAction):string{
+  const template=actionTemplateFor(action.provider,action.name);
+  if(template?.toolName)return slug(template.toolName);
+  let n=action.name.toLowerCase();
+  for(const word of ["salesforce","hubspot","intercom","freshdesk","help scout","gorgias","zoho desk","zendesk","calendly","slack","whatsapp","facebook messenger","instagram","twilio","wordpress","stripe","notion","google drive","dropbox","resend","zapier","make","n8n"]){n=n.replaceAll(word," ")}
+  return slug(n);
+}
+export interface ConnectorToolBinding {toolName:string; action:RuntimeConnectorAction}
+export function connectorActionTools(actions:RuntimeConnectorAction[]):{tools:ToolSpec[];bindings:Map<string,RuntimeConnectorAction>}{
+  const tools:ToolSpec[]=[];const bindings=new Map<string,RuntimeConnectorAction>();const seen=new Map<string,number>();
+  for(const action of actions){
+    const base=semanticToolBase(action);const count=(seen.get(base)??0)+1;seen.set(base,count);const toolName=count===1?base:`${base}_${count}`;
+    const parameters=(action.request_schema&&typeof action.request_schema==="object"?action.request_schema:{type:"object",properties:{}}) as Record<string,unknown>;
+    const description=[action.description||action.capability,action.require_confirmation&& !isReadLike(action)?"The customer must explicitly confirm before the external change is committed.":"",`Capability: ${action.capability}.`].filter(Boolean).join(" ");
+    tools.push({type:"function",function:{name:toolName,description,parameters}});
+    bindings.set(toolName,action);
+  }
+  return{tools,bindings};
+}
+
+export function connectorCapabilitySummary(actions:RuntimeConnectorAction[]):string[]{
+  const out:string[]=[];const seen=new Set<string>();
+  for(const action of actions){
+    const template=actionTemplateFor(action.provider,action.name);const label=template?.toolName?template.toolName.replaceAll("_"," "):action.name.replace(new RegExp(action.provider,"ig"),"").trim();
+    const clean=label.replace(/\s+/g," ").trim();if(clean&&!seen.has(clean.toLowerCase())){seen.add(clean.toLowerCase());out.push(clean)}
+  }
+  return out.slice(0,30);
+}
+
+/** Legacy single-action tool retained only for internal compatibility. New model calls
+ * receive one clean function per approved action through connectorActionTools(). */
 export function connectorActionTool(actions:RuntimeConnectorAction[]):ToolSpec|null{
   if(!actions.length)return null;
-  const catalogue=actions.map(a=>`${a.id} — ${a.name} [${a.method}]${a.require_confirmation?" (confirmation required)":""}: ${a.description||a.capability}. Input schema: ${JSON.stringify(a.request_schema||{})}`).join("\n");
-  return {type:"function",function:{name:"run_connector_action",description:`Run one administrator-approved external integration action. Never invent an action id. For an action marked confirmation required, ask the customer for explicit confirmation first and only call it after they confirm. Available actions:\n${catalogue}`.slice(0,12000),parameters:{type:"object",properties:{actionId:{type:"string",enum:actions.map(a=>a.id),description:"Approved action id"},input:{type:"object",description:"Arguments required by the selected action. Use the action description and customer request; never include secrets."},confirmed:{type:"boolean",description:"Set true only after the customer explicitly confirmed a confirmation-required action."}},required:["actionId","input"]}}};
+  return {type:"function",function:{name:"run_connector_action",description:"Run a server-approved integration action by internal id.",parameters:{type:"object",properties:{actionId:{type:"string",enum:actions.map(a=>a.id)},input:{type:"object"}},required:["actionId","input"]}}};
+}
+
+export function runtimeActionIntentMatch(message:string,actions:RuntimeConnectorAction[]):boolean{
+  const stop=new Set(["the","a","an","to","for","my","your","our","and","or","in","on","of","with","from","list","check","create","run"]);
+  const tokens=(v:string)=>new Set(v.toLowerCase().replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(x=>x.length>2&&!stop.has(x)));
+  const mt=tokens(message);if(!mt.size)return false;
+  for(const a of actions){const at=tokens(`${a.name} ${a.description} ${a.capability}`);let score=0;for(const t of mt)if(at.has(t))score++;if(score>=2)return true}
+  return false;
 }
 
 function isPrivateHost(host:string):boolean{const h=host.toLowerCase().replace(/^\[|\]$/g,"");if(h==="localhost"||h.endsWith(".localhost")||h==="::1"||h==="0.0.0.0"||/^127\./.test(h)||/^10\./.test(h)||/^192\.168\./.test(h)||/^169\.254\./.test(h))return true;const m=h.match(/^172\.(\d+)\./);if(m&&Number(m[1])>=16&&Number(m[1])<=31)return true;return h.startsWith("fc")||h.startsWith("fd")||h.startsWith("fe80:")}

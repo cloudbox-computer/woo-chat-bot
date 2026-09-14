@@ -17,11 +17,24 @@ export async function ensureDefaultConnectorActions(tenantId:string,provider:str
   const byName=new Map(existing.map(x=>[String(x.name),String(x.id)]));
   let changed=0;
   for(const t of templates){
-    const row={tenant_id:tenantId,provider,name:t.name,description:t.description,capability:t.capability,method:t.method,path_template:t.pathTemplate,request_schema:t.requestSchema??{},response_mapping:t.responseMapping??{},require_confirmation:t.requireConfirmation===true||t.method!=="GET",active:true,updated_at:new Date().toISOString()};
+    const row={tenant_id:tenantId,provider,name:t.name,description:t.description,capability:t.capability,method:t.method,path_template:t.pathTemplate,request_schema:t.requestSchema??{},response_mapping:t.responseMapping??{},require_confirmation:t.requireConfirmation ?? (t.method!=="GET"),active:true,updated_at:new Date().toISOString()};
     const id=byName.get(t.name);
     if(id)await write("PATCH",`connector_actions?id=eq.${encodeURIComponent(id)}&tenant_id=eq.${encodeURIComponent(tenantId)}`,row);
     else await write("POST","connector_actions",{id:crypto.randomUUID(),...row,created_by:createdBy??null});
     changed++;
   }
   return changed;
+}
+
+
+/** Backfill built-in actions for every active connection in a tenant. */
+export async function ensureTenantDefaultConnectorActions(tenantId:string):Promise<number>{
+  const integrations=await rows("integrations",{tenant_id:`eq.${tenantId}`,active:"eq.true",select:"provider",limit:"100"});
+  let total=0;
+  for(const row of integrations){
+    const provider=String(row.provider??"");
+    if(!provider)continue;
+    total+=await ensureDefaultConnectorActions(tenantId,provider).catch(()=>0);
+  }
+  return total;
 }

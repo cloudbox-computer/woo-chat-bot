@@ -15,7 +15,7 @@ import { createIntegrationRouter, toolSupported } from "./integrations/router.ts
 import type { ChatRequest, ChatResponse, Conversation, Product, Tenant, TenantPolicy, ToolPermission, WidgetInteraction } from "./types.ts";
 import { DEFAULT_CHATBOT_PERMISSIONS } from "./types.ts";
 import { redactForStorage } from "./privacy.ts";
-import { connectorActionTool, listRuntimeActions, executeConnectorAction } from "./connectors/runtime.ts";
+import { connectorActionTools, connectorCapabilitySummary, listRuntimeActions, executeConnectorAction, runtimeActionIntentMatch } from "./connectors/runtime.ts";
 import { entitlementsForTenant } from "./entitlements.ts";
 
 export const MAX_TOOL_TURNS = 6;
@@ -183,17 +183,26 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     ["add_to_cart", "view_cart", "create_checkout", "create_ticket", "check_ticket_status"].forEach((name) => allowed.delete(name));
   }
   const botPermissions = chatbot.permissions ?? DEFAULT_CHATBOT_PERMISSIONS;
-  const canReadActions = botPermissions.includes("read") || botPermissions.includes("admin") || botPermissions.includes("sensitive");
-  const canWriteActions = botPermissions.includes("sensitive") || botPermissions.includes("admin");
+  const canReadActions = botPermissions.includes("read") || botPermissions.includes("support") || botPermissions.includes("admin") || botPermissions.includes("sensitive");
+  // Normal customer-facing assistants may initiate only explicitly marked, built-in
+  // customer-safe mutations (for example booking an appointment or creating a lead).
+  // Arbitrary/custom or high-risk writes still require sensitive/admin permission.
+  const canSafeCustomerWriteActions = botPermissions.includes("support") || botPermissions.includes("sensitive") || botPermissions.includes("admin");
+  const canPrivilegedWriteActions = botPermissions.includes("sensitive") || botPermissions.includes("admin");
   // HIPAA mode disables arbitrary external actions unless a future connector is
   // explicitly BAA-vetted. This prevents accidental PHI disclosure.
   const liveIntegrationAccess = entitlementsForTenant(tenant).liveIntegrations;
   agentTrace(req.requestId, "actions:start", agentStartedAt, { enabled: liveIntegrationAccess && !tenant.hipaaMode && canReadActions });
-  const runtimeActions = liveIntegrationAccess && !tenant.hipaaMode && canReadActions ? await listRuntimeActions(tenant.id, canWriteActions) : [];
-  agentTrace(req.requestId, "actions:done", agentStartedAt, { count: runtimeActions.length });
-  const runtimeActionTool = connectorActionTool(runtimeActions);
-  if (runtimeActionTool) allowed.add("run_connector_action");
-  const tools = [...TOOL_SPECS.filter((t) => allowed.has(t.function.name)), ...(runtimeActionTool ? [runtimeActionTool] : [])];
+  const runtimeActions = liveIntegrationAccess && !tenant.hipaaMode && canReadActions
+    ? await listRuntimeActions(tenant.id, chatbotId, { read: true, safeCustomerWrites: canSafeCustomerWriteActions, privilegedWrites: canPrivilegedWriteActions })
+    : [];
+  agentTrace(req.requestId, "actions:done", agentStartedAt, { count: runtimeActions.length, safeCustomerWrites: canSafeCustomerWriteActions, privilegedWrites: canPrivilegedWriteActions });
+  // Keep the internal permission marker for deterministic widget actions, but expose
+  // one clean, schema-specific model tool per approved action instead of a giant
+  // UUID catalogue. This materially improves tool selection and input quality.
+  if (runtimeActions.length) allowed.add("run_connector_action");
+  const connectorModel = connectorActionTools(runtimeActions);
+  const tools = [...TOOL_SPECS.filter((t) => allowed.has(t.function.name)), ...connectorModel.tools];
   if (tools.length === 0) {
     throw new AgentError("This chatbot has no tools enabled", 500);
   }
@@ -204,13 +213,14 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // submissions to complete deterministically.
   const trustedWidgetAction = widgetActionMatchesRuntime(req.widgetAction, runtimeActions);
   const deterministicConnector = detectDeterministicConnectorAction(req.message, runtimeActions);
+  const approvedIntegrationIntent = runtimeActionIntentMatch(req.message, runtimeActions);
 
   // Gate 3 — tenant-configured scope. Fast lexical matching runs first; only
   // ambiguous messages use semantic classification. Server-issued widget
   // actions and unambiguous native scheduling intents bypass semantic scope
   // classification because they are already constrained to approved actions.
-  if (trustedWidgetAction || deterministicConnector) {
-    agentTrace(req.requestId, "topic-gate:bypass", agentStartedAt, { reason: trustedWidgetAction ? "trusted-widget-action" : "approved-integration-intent" });
+  if (trustedWidgetAction || deterministicConnector || approvedIntegrationIntent) {
+    agentTrace(req.requestId, "topic-gate:bypass", agentStartedAt, { reason: trustedWidgetAction ? "trusted-widget-action" : deterministicConnector ? "deterministic-integration-intent" : "approved-integration-capability" });
   } else {
     agentTrace(req.requestId, "topic-gate:start", agentStartedAt);
     const topic = await checkTopicGate(
@@ -358,7 +368,8 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   const system = buildSystemPrompt(
     tenant,
     policy,
-    chatbot.name
+    chatbot.name,
+    connectorCapabilitySummary(runtimeActions),
   );
 
   // Flattened transcript: stored history first, then the new message last so
@@ -432,8 +443,11 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
       for (const call of result.toolCalls) {
         const toolStartedAt = Date.now();
         agentTrace(req.requestId, "tool:start", agentStartedAt, { tool: call.name, toolTurn: toolTurns });
-        const toolResult = await executeTool(call.name, call.arguments, ctx);
-        agentTrace(req.requestId, "tool:done", agentStartedAt, { tool: call.name, toolTurn: toolTurns, toolElapsedMs: Date.now() - toolStartedAt });
+        const boundAction = connectorModel.bindings.get(call.name);
+        const toolResult = boundAction
+          ? await executeConnectorAction({ tenantId: tenant.id, actionId: boundAction.id, input: call.arguments ?? {}, confirmed: false, userMessage: req.message, conversationId: persistConversation ? conversationId : undefined })
+          : await executeTool(call.name, call.arguments, ctx);
+        agentTrace(req.requestId, "tool:done", agentStartedAt, { tool: call.name, toolTurn: toolTurns, toolElapsedMs: Date.now() - toolStartedAt, connectorAction: Boolean(boundAction) });
         if (toolResult.interaction) {
           pendingInteraction = toolResult.interaction;
           finalContent = toolResult.text;
@@ -556,7 +570,8 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
 function buildSystemPrompt(
   tenant: Tenant,
   policy: TenantPolicy,
-  assistantName?: string
+  assistantName?: string,
+  connectedCapabilities: string[] = [],
 ): string {
   const name = tenant.name;
   const botName = (assistantName ?? "").trim();
@@ -605,8 +620,16 @@ function buildSystemPrompt(
     "",
     `Tone and style: ${tone}.`,
     "",
+    "CONNECTED CAPABILITIES AVAILABLE NOW:",
+    connectedCapabilities.length ? `- ${connectedCapabilities.join("\n- ")}` : "- No additional external actions are connected for this assistant.",
+    "- These are real server-approved capabilities available in this conversation. If the customer asks for one, use the corresponding tool rather than saying you cannot do it.",
+    "- Do not expose provider names, tool names, action IDs, API paths or schemas to the customer.",
+    "",
     "Tool rules:",
-    "- Use connected tools when they are relevant and available. Never invent facts that should come from a connected system.",
+    "- Use connected tools proactively when they are relevant and available. Never invent facts that should come from a connected system.",
+    "- Before saying an integration-backed task is unavailable, check the tools you have been given for this request.",
+    "- When a tool needs missing customer input, ask only for the missing fields. If the tool returns an in-chat form or picker, present that interaction instead of asking the customer to understand technical fields.",
+    "- When a mutation requires confirmation, never claim it is complete until the confirmed tool execution succeeds.",
     "- Use search_knowledge for tenant-provided facts and guidance.",
     "- Use search_website only for the tenant's own website. Never browse or cite unrelated websites.",
     "- If a tool returns nothing, say so honestly rather than inventing an answer.",

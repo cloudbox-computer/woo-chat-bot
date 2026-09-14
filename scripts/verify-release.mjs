@@ -62,6 +62,11 @@ check('ZDR connector audit avoids transient conversation FK', tools.includes('au
 check('WordPress is a syncable data source', dataSources.includes('fromWordPress') && text('dashboard/src/pages/Knowledge.tsx').includes('wordpress'));
 check('connector action request/response limits', connectorRuntime.includes('256 KB safety limit') && connectorRuntime.includes('1 MB safety limit'));
 check('integration preset UI present', text('dashboard/src/pages/Integrations.tsx').includes('Ready-made actions') && text('dashboard/src/pages/Integrations.tsx').includes('Connect securely'));
+check('clean per-action AI tools', connectorRuntime.includes('connectorActionTools') && text('supabase/functions/_shared/agent.ts').includes('connectorModel.bindings'));
+check('customer-safe writes available to normal assistants', connectorRuntime.includes('isCustomerSafeBuiltInWrite') && text('supabase/functions/_shared/agent.ts').includes('canSafeCustomerWriteActions'));
+check('assistant-scoped connector actions', schema.includes('connector_action_chatbots') && connectorRuntime.includes('chatbotId') && text('dashboard/src/pages/Integrations.tsx').includes('Available to assistants'));
+check('connected capability prompt awareness', text('supabase/functions/_shared/agent.ts').includes('CONNECTED CAPABILITIES AVAILABLE NOW'));
+check('built-in action backfill on runtime', connectorRuntime.includes('ensureTenantDefaultConnectorActions'));
 
 
 // Local relative TS imports must resolve to a file.

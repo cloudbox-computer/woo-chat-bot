@@ -406,7 +406,7 @@ export interface ConnectorItem {
   configured:boolean; active:boolean; credentials:Record<string,unknown>; oauthAvailable?:boolean;
   health?:{provider:string;status:string;message?:string|null;checked_at?:string|null;latency_ms?:number|null}|null;
 }
-export interface ConnectorActionItem { id:string; provider:string; name:string; description:string; capability:string; method:string; path_template:string; request_schema:Record<string,unknown>; response_mapping:Record<string,unknown>; require_confirmation:boolean; active:boolean; created_at:string; }
+export interface ConnectorActionItem { id:string; provider:string; name:string; description:string; capability:string; method:string; path_template:string; request_schema:Record<string,unknown>; response_mapping:Record<string,unknown>; require_confirmation:boolean; active:boolean; created_at:string; chatbot_ids?:string[]; }
 
 function sourceQuery(tenantId:string,action:string,extra?:Record<string,string>){const q=new URLSearchParams({tenantId,action,...(extra??{})});return `/data-sources?${q.toString()}`;}
 export function listDataSources(tenantId:string,chatbotId?:string){return request<{items:DataSourceItem[]}>(sourceQuery(tenantId,"sources",chatbotId?{chatbotId}:undefined));}
@@ -419,7 +419,7 @@ export function listConnections(tenantId:string){return request<{items:Connector
 export function saveConnection(tenantId:string,provider:string,credentials:Record<string,unknown>,active=true){return request<{ok:boolean}>(sourceQuery(tenantId,"connections"),{method:"PUT",body:JSON.stringify({provider,credentials,active})});}
 export function removeConnection(tenantId:string,provider:string){return request<{ok:boolean}>(sourceQuery(tenantId,"connections",{provider}),{method:"DELETE"});}
 export function testConnection(tenantId:string,provider:string){return request<{ok:boolean;status:string;message:string;latencyMs:number}>(sourceQuery(tenantId,"connection_test"),{method:"POST",body:JSON.stringify({provider})});}
-export function listConnectorActions(tenantId:string){return request<{items:ConnectorActionItem[]}>(sourceQuery(tenantId,"actions"));}
+export function listConnectorActions(tenantId:string){return request<{items:ConnectorActionItem[];assistants:Array<{id:string;name:string;active:boolean}>}>(sourceQuery(tenantId,"actions"));}
 export function saveConnectorAction(tenantId:string,input:Record<string,unknown>,id?:string){return request<{ok:boolean;id:string}>(sourceQuery(tenantId,"actions",id?{id}:undefined),{method:id?"PUT":"POST",body:JSON.stringify(input)});}
 export function deleteConnectorAction(tenantId:string,id:string){return request<{ok:boolean}>(sourceQuery(tenantId,"actions",{id}),{method:"DELETE"});}
 export function startConnectorOAuth(tenantId:string,provider:string){const q=new URLSearchParams({action:"start",tenantId,provider});return request<{url:string;expiresAt:string}>(`/connector-oauth-start?${q.toString()}`,{method:"POST"});}
