@@ -27,6 +27,7 @@ export interface RuntimeActionAccess {
   read: boolean;
   safeCustomerWrites: boolean;
   privilegedWrites: boolean;
+  restrictedGrants: boolean;
 }
 
 const actionSeedCache = new Map<string, number>();
@@ -79,7 +80,7 @@ export async function listRuntimeActions(tenantId:string,chatbotId:string,access
     // Restricted writes (email, SMS, publishing, automation, etc.) are available
     // to a normal customer-facing assistant only after an admin explicitly grants
     // this exact action to this exact assistant.
-    return restrictedWriteGrants.has(action.id);
+    return access.restrictedGrants && restrictedWriteGrants.has(action.id);
   });
 }
 

@@ -165,6 +165,9 @@ export interface PlanEntitlements {
   subscriptionActive: boolean;
   liveIntegrations: boolean;
   businessData: boolean;
+  customerSafeActions: boolean;
+  restrictedActionPermissions: boolean;
+  customActions: boolean;
   team: boolean;
   humanTakeover: boolean;
   auditLog: boolean;

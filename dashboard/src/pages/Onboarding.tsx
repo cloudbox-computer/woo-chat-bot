@@ -605,7 +605,7 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
                     </div>
                     <span className="badge off">Growth+</span>
                   </div>
-                  <p className="muted">Upgrade to Growth or Scale to connect WooCommerce.</p>
+                  <p className="muted">Upgrade to Growth or Scale to connect live integrations such as WooCommerce.</p>
                 </div>
                 <div className="integration-onboarding-card locked-integration">
                   <div className="integration-onboarding-head">
@@ -615,7 +615,7 @@ export default function Onboarding({ tenantId, onComplete }: OnboardingProps) {
                     </div>
                     <span className="badge off">Growth+</span>
                   </div>
-                  <p className="muted">Upgrade to Growth or Scale to connect Supabase.</p>
+                  <p className="muted">Upgrade to Growth or Scale to connect live integrations and business-data sources such as Supabase.</p>
                 </div>
               </>
             ) : (

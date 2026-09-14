@@ -191,10 +191,11 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   const canPrivilegedWriteActions = botPermissions.includes("sensitive") || botPermissions.includes("admin");
   // HIPAA mode disables arbitrary external actions unless a future connector is
   // explicitly BAA-vetted. This prevents accidental PHI disclosure.
-  const liveIntegrationAccess = entitlementsForTenant(tenant).liveIntegrations;
+  const planEntitlements = entitlementsForTenant(tenant);
+  const liveIntegrationAccess = planEntitlements.liveIntegrations;
   agentTrace(req.requestId, "actions:start", agentStartedAt, { enabled: liveIntegrationAccess && !tenant.hipaaMode && canReadActions });
   const runtimeActions = liveIntegrationAccess && !tenant.hipaaMode && canReadActions
-    ? await listRuntimeActions(tenant.id, chatbotId, { read: true, safeCustomerWrites: canSafeCustomerWriteActions, privilegedWrites: canPrivilegedWriteActions })
+    ? await listRuntimeActions(tenant.id, chatbotId, { read: true, safeCustomerWrites: canSafeCustomerWriteActions && planEntitlements.customerSafeActions, privilegedWrites: canPrivilegedWriteActions, restrictedGrants: planEntitlements.restrictedActionPermissions })
     : [];
   agentTrace(req.requestId, "actions:done", agentStartedAt, { count: runtimeActions.length, safeCustomerWrites: canSafeCustomerWriteActions, privilegedWrites: canPrivilegedWriteActions });
   // Keep the internal permission marker for deterministic widget actions, but expose

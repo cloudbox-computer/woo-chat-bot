@@ -5,6 +5,9 @@ export type PaidPlanKey = "starter" | "growth" | "scale";
 export type PlanFeature =
   | "liveIntegrations"
   | "businessData"
+  | "customerSafeActions"
+  | "restrictedActionPermissions"
+  | "customActions"
   | "team"
   | "humanTakeover"
   | "auditLog"
@@ -19,6 +22,9 @@ export interface PlanEntitlements {
   subscriptionActive: boolean;
   liveIntegrations: boolean;
   businessData: boolean;
+  customerSafeActions: boolean;
+  restrictedActionPermissions: boolean;
+  customActions: boolean;
   team: boolean;
   humanTakeover: boolean;
   auditLog: boolean;
@@ -33,6 +39,9 @@ export interface PlanEntitlements {
 const MINIMUM_PLAN: Record<PlanFeature, PaidPlanKey> = {
   liveIntegrations: "growth",
   businessData: "growth",
+  customerSafeActions: "growth",
+  restrictedActionPermissions: "growth",
+  customActions: "scale",
   team: "growth",
   humanTakeover: "growth",
   fullAnalytics: "growth",
@@ -64,6 +73,9 @@ export function entitlementsForTenant(tenant: Pick<Tenant, "plan" | "billingEnfo
       subscriptionActive: true,
       liveIntegrations: true,
       businessData: true,
+      customerSafeActions: true,
+      restrictedActionPermissions: true,
+      customActions: true,
       team: true,
       humanTakeover: true,
       auditLog: true,
@@ -86,6 +98,9 @@ export function entitlementsForTenant(tenant: Pick<Tenant, "plan" | "billingEnfo
       subscriptionActive: false,
       liveIntegrations: false,
       businessData: false,
+      customerSafeActions: false,
+      restrictedActionPermissions: false,
+      customActions: false,
       team: false,
       humanTakeover: false,
       auditLog: false,
@@ -105,6 +120,9 @@ export function entitlementsForTenant(tenant: Pick<Tenant, "plan" | "billingEnfo
     subscriptionActive,
     liveIntegrations: subscriptionActive && planAllows(plan, "liveIntegrations"),
     businessData: subscriptionActive && planAllows(plan, "businessData"),
+    customerSafeActions: subscriptionActive && planAllows(plan, "customerSafeActions"),
+    restrictedActionPermissions: subscriptionActive && planAllows(plan, "restrictedActionPermissions"),
+    customActions: subscriptionActive && planAllows(plan, "customActions"),
     team: subscriptionActive && planAllows(plan, "team"),
     humanTakeover: subscriptionActive && planAllows(plan, "humanTakeover"),
     auditLog: subscriptionActive && planAllows(plan, "auditLog"),
@@ -143,6 +161,9 @@ export function planFeatureLabel(feature: PlanFeature): string {
   const names: Record<PlanFeature, string> = {
     liveIntegrations: "Live integrations",
     businessData: "Business-data tools",
+    customerSafeActions: "Customer-safe actions",
+    restrictedActionPermissions: "Per-assistant restricted action permissions",
+    customActions: "Custom actions",
     team: "Team access",
     humanTakeover: "Human takeover",
     auditLog: "Audit log",

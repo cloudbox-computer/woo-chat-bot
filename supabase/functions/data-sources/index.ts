@@ -3,7 +3,7 @@ import { handleOptions, json } from "../_shared/cors.ts";
 import { supabaseConfig } from "../_shared/env.ts";
 import { audit } from "../_shared/audit.ts";
 import { enqueueJob } from "../_shared/jobs.ts";
-import { CONNECTORS, definition, encryptCredentials, publicCredentialSummary, testConnector } from "../_shared/connectors/registry.ts";
+import { CONNECTORS, definition, encryptCredentials, publicCredentialSummary, testConnector, isBuiltInAction } from "../_shared/connectors/registry.ts";
 import { requirePlanFeature } from "../_shared/entitlements.ts";
 import { oauthAvailable } from "../_shared/connectors/oauth.ts";
 import { ensureDefaultConnectorActions } from "../_shared/connectors/default-actions.ts";
@@ -65,14 +65,18 @@ async function saveAction(ctx:Awaited<ReturnType<typeof resolveDashboardContext>
   const path=String(b.pathTemplate??"").trim();if(!path.startsWith("/"))throw new DashboardError("Action path must begin with /");if(path.length>2000||path.includes("..")||path.includes("\\")||path.includes("//")||/%2e/i.test(path))throw new DashboardError("Action path is unsafe");
   const connected=await rows("integrations",{tenant_id:`eq.${ctx.tenantId}`,provider:`eq.${provider}`,active:"eq.true",select:"id",limit:"1"});if(!connected[0])throw new DashboardError("Connect this provider before creating an action",409);
   const schema=b.requestSchema&&typeof b.requestSchema==="object"&&!Array.isArray(b.requestSchema)?b.requestSchema:{};const mapping=b.responseMapping&&typeof b.responseMapping==="object"&&!Array.isArray(b.responseMapping)?b.responseMapping:{};
+  const existingAction=await rows("connector_actions",{id:`eq.${id}`,tenant_id:`eq.${ctx.tenantId}`,select:"id,provider,name,method,path_template",limit:"1"});
+  const builtIn=isBuiltInAction(provider,name,method,path);
+  if(!builtIn && !existingAction[0]) requirePlanFeature(ctx.tenant,"customActions");
   const forcedConfirmation=method==="DELETE"||/refund|payment|delete|cancel/i.test(String(b.capability??"")+" "+name);
   const row={tenant_id:ctx.tenantId,provider,name,description:cleanName(b.description,500),capability:cleanName(b.capability,120)||"custom.read",method,path_template:path,request_schema:schema,response_mapping:mapping,require_confirmation:forcedConfirmation||b.requireConfirmation!==false,active:b.active!==false,updated_at:new Date().toISOString()};
-  const existing=await rows("connector_actions",{id:`eq.${id}`,tenant_id:`eq.${ctx.tenantId}`,select:"id",limit:"1"});if(existing[0])await write("PATCH",`connector_actions?id=eq.${id}&tenant_id=eq.${ctx.tenantId}`,row);else await write("POST","connector_actions",{id,...row,created_by:ctx.user.id});
+  const existing=existingAction;if(existing[0])await write("PATCH",`connector_actions?id=eq.${id}&tenant_id=eq.${ctx.tenantId}`,row);else await write("POST","connector_actions",{id,...row,created_by:ctx.user.id});
   // Empty chatbotIds means "All assistants" for ordinary visibility. Restricted
   // writes are different: they always require an explicit per-assistant grant.
   if(Array.isArray(b.chatbotIds)){
     const requested=[...new Set(b.chatbotIds.map(x=>String(x).trim()).filter(Boolean))];
     const restrictedRequested=Array.isArray(b.restrictedChatbotIds)?[...new Set(b.restrictedChatbotIds.map(x=>String(x).trim()).filter(Boolean))]:[];
+    if(restrictedRequested.length) requirePlanFeature(ctx.tenant,"restrictedActionPermissions");
     for(const botId of restrictedRequested){if(!requested.includes(botId))throw new DashboardError("Restricted action permission requires the assistant to be selected for this action",400)}
     if(requested.length){
       const valid=await rows("chatbots",{tenant_id:`eq.${ctx.tenantId}`,id:`in.(${requested.join(",")})`,select:"id",limit:"100"});
