@@ -420,6 +420,7 @@ export interface ChatResponse {
   interaction?: WidgetInteraction;
   conversationId: string;
   conversationToken?: string;
+  requiresEmail?: boolean;
 }
 
 export const SUPPORTED_TOOL_NAMES = [
