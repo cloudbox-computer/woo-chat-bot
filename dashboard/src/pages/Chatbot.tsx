@@ -13,11 +13,12 @@ function strings(v: unknown): string[] {
   return Array.isArray(v) ? v.map(String).filter(Boolean) : [];
 }
 
-export default function ChatbotPage({ tenantId, config, onConfigChange, onUpgrade }: {
+export default function ChatbotPage({ tenantId, config, onConfigChange, onUpgrade, onNavigate }: {
   tenantId: string;
   config: ConfigData | null;
   onConfigChange: (c: ConfigData) => void;
   onUpgrade?: () => void;
+  onNavigate?: (page: string) => void;
 }) {
   const [data, setData] = React.useState<ConfigData | null>(config);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -170,8 +171,8 @@ export default function ChatbotPage({ tenantId, config, onConfigChange, onUpgrad
     <>
       <div className="page-head">
         <div>
-          <h1>AI Assistants</h1>
-          <p className="desc">Create and manage the individual chatbots inside this workspace.</p>
+          <h1>Assistants</h1>
+          <p className="desc">Choose what your assistant knows, what it can do and where customers can reach it.</p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Badge tone={activeCount < max ? "on" : "off"}>{activeCount} of {max} active</Badge>
@@ -179,6 +180,14 @@ export default function ChatbotPage({ tenantId, config, onConfigChange, onUpgrad
             {activeCount < max ? "+ Create AI Assistant" : "Upgrade for more"}
           </button>
         </div>
+      </div>
+
+      <div className="assistant-journey" aria-label="Assistant setup">
+        <button className="journey-step active" onClick={()=>setTab("settings")}><span>1</span><div><b>Behaviour</b><small>Name, tone & boundaries</small></div></button>
+        <button className="journey-step" onClick={()=>onNavigate?.("procedures")}><span>2</span><div><b>Workflows</b><small>Teach repeatable jobs</small></div></button>
+        <button className="journey-step" onClick={()=>onNavigate?.("widgets")}><span>3</span><div><b>Chat experience</b><small>Cards, forms & booking</small></div></button>
+        <button className="journey-step" onClick={()=>onNavigate?.("testing")}><span>4</span><div><b>Test</b><small>Check before customers do</small></div></button>
+        <button className="journey-step" onClick={()=>onNavigate?.("channels")}><span>5</span><div><b>Deploy</b><small>Website & other channels</small></div></button>
       </div>
 
       {creating && (
@@ -216,7 +225,7 @@ export default function ChatbotPage({ tenantId, config, onConfigChange, onUpgrad
           {bot ? <>
             <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
               <button className={`btn ${tab === "settings" ? "" : "secondary"} sm`} onClick={() => setTab("settings")}>Settings</button>
-              <button className={`btn ${tab === "install" ? "" : "secondary"} sm`} onClick={() => setTab("install")}>Install</button>
+              <button className={`btn ${tab === "install" ? "" : "secondary"} sm`} onClick={() => setTab("install")}>Website install</button>
             </div>
 
             {tab === "settings" && <Card>
@@ -227,18 +236,18 @@ export default function ChatbotPage({ tenantId, config, onConfigChange, onUpgrad
               <Field label="Assistant name"><input value={name} onChange={(e) => setName(e.target.value)} /></Field>
               <Field label="Assistant header message"><textarea value={assistantHeader} onChange={(e) => setAssistantHeader(e.target.value)} /></Field>
               <Field label="Welcome message"><textarea value={welcome} onChange={(e) => setWelcome(e.target.value)} /></Field>
-              <Field label="Personality / tone"><input value={tone} onChange={(e) => setTone(e.target.value)} /></Field>
-              <Field label="Allowed topics" hint="One per line. These topics apply only to this assistant.">
+              <Field label="How should it sound?"><input value={tone} onChange={(e) => setTone(e.target.value)} /></Field>
+              <Field label="What can it help with?" hint="One topic per line, for example: delivery, returns, products, appointments.">
                 <textarea value={allowedTopicsText} onChange={(e) => setAllowedTopicsText(e.target.value)} />
               </Field>
-              <Field label="Out-of-scope reply"><textarea value={refusalMessage} onChange={(e) => setRefusalMessage(e.target.value)} /></Field>
-              <Field label="Widget colour" hint="Hex colour used by this assistant widget only."><input value={brandColour} onChange={(e) => setBrandColour(e.target.value)} placeholder="#7c3aed" /></Field>
-              <Field label="Scope strictness">
+              <Field label="When it cannot help"><textarea value={refusalMessage} onChange={(e) => setRefusalMessage(e.target.value)} /></Field>
+              <Field label="Chat colour" hint="Choose the colour customers see in chat."><input value={brandColour} onChange={(e) => setBrandColour(e.target.value)} placeholder="#7c3aed" /></Field>
+              <Field label="How tightly should it stay on topic?">
                 <select value={securityLevel} onChange={(e) => setSecurityLevel(e.target.value as typeof securityLevel)}>
                   <option value="standard">Standard</option><option value="strict">Strict</option><option value="extra-strict">Extra strict</option>
                 </select>
               </Field>
-              <Field label="Widget starter chips" hint="One per line. Use Label | Prompt for a different sent prompt.">
+              <Field label="Conversation starters" hint="One per line, for example: Track my order or Book an appointment.">
                 <textarea value={quickActionsText} onChange={(e) => setQuickActionsText(e.target.value)} />
               </Field>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

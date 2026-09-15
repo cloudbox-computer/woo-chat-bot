@@ -2,7 +2,7 @@ import React from "react";
 import { getOverview, getTranscript, sendAgentMessage, setConversationMode, getBilling, getIntegrations, type BillingState, type IntegrationItem, type ConfigData, type OverviewData } from "../lib/api";
 import { Card, Spinner, ErrorBox, Badge } from "../components/ui";
 
-export default function Overview({ tenantId, config, onNavigate }: { tenantId: string; config: ConfigData | null; onNavigate?: (page: "chatbot"|"integrations"|"billing") => void }) {
+export default function Overview({ tenantId, config, onNavigate }: { tenantId: string; config: ConfigData | null; onNavigate?: (page: "chatbot"|"integrations"|"billing"|"knowledge"|"inbox"|"analytics"|"procedures"|"testing"|"channels") => void }) {
   const [data, setData] = React.useState<OverviewData | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [transcript, setTranscript] = React.useState<{conversation:Record<string,unknown>;messages:Array<Record<string,unknown>>}|null>(null);
@@ -34,24 +34,31 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
     <>
       <div className="page-head">
         <div>
-          <h1>Overview</h1>
-          <p className="desc">{config?.tenant ? `Welcome back, ${config.tenant.name}.` : "Your assistant at a glance."}</p>
+          <h1>Home</h1>
+          <p className="desc">{config?.tenant ? `Here’s what’s happening with ${config.tenant.name}.` : "Your customer assistant at a glance."}</p>
         </div>
       </div>
 
       {!data && !error && <Spinner />}
 
+      <div className="customer-first-actions">
+        <button onClick={()=>onNavigate?.("knowledge")}><span>▤</span><div><b>Teach ZoChat something</b><small>Add website pages, FAQs or knowledge</small></div><em>→</em></button>
+        <button onClick={()=>onNavigate?.("procedures")}><span>↗</span><div><b>Teach it a customer job</b><small>Create a workflow in plain English</small></div><em>→</em></button>
+        <button onClick={()=>onNavigate?.("testing")}><span>✓</span><div><b>Test your assistant</b><small>Check an important customer question</small></div><em>→</em></button>
+        <button onClick={()=>onNavigate?.("channels")}><span>⌁</span><div><b>Put it in front of customers</b><small>Website chat and connected channels</small></div><em>→</em></button>
+      </div>
+
       {config?.tenant && (
         <Card className="overview-setup-card">
           <div className="overview-setup-head">
-            <div><h3>Finish setup</h3><p className="muted">Your workspace is ready. Complete these steps to start serving customers.</p></div>
+            <div><h3>Get ready for customers</h3><p className="muted">Complete the essentials, then test your assistant before you publish it.</p></div>
             {billing && <Badge tone={billing.status === "active" || billing.status === "trialing" ? "resolved" : "in_progress"}>{billing.status === "trialing" ? "14-day trial active" : billing.status === "active" ? `${billing.plan} plan active` : "Billing needs attention"}</Badge>}
           </div>
           <div className="setup-grid">
-            <button className="setup-step done" type="button" onClick={()=>onNavigate?.("chatbot")}><span>✓</span><div><b>Business & assistant</b><small>Configured</small></div></button>
-            <button className={`setup-step ${integrations.some(i=>i.active&&i.configured)?"done":""}`} type="button" onClick={()=>onNavigate?.("integrations")}><span>{integrations.some(i=>i.active&&i.configured)?"✓":"2"}</span><div><b>Connect integrations</b><small>{config?.entitlements.liveIntegrations ? (integrations.some(i=>i.active&&i.configured)?`${integrations.filter(i=>i.active&&i.configured).length} connected`:"Optional — connect your systems") : "Growth unlocks live integrations & AI actions"}</small></div></button>
-            <button className={`setup-step ${billing && ["active","trialing"].includes(billing.status)?"done":""}`} type="button" onClick={()=>onNavigate?.("billing")}><span>{billing && ["active","trialing"].includes(billing.status)?"✓":"3"}</span><div><b>Plan & billing</b><small>{billing?.status === "trialing"?"Free trial active":billing?.status === "active"?`${billing.plan} active`:"Complete subscription"}</small></div></button>
-            <button className="setup-step" type="button" onClick={()=>onNavigate?.("chatbot")}><span>4</span><div><b>Install website widget</b><small>Copy your unique embed snippet</small></div></button>
+            <button className="setup-step done" type="button" onClick={()=>onNavigate?.("chatbot")}><span>✓</span><div><b>Assistant behaviour</b><small>Tell ZoChat how to speak and what to help with</small></div></button>
+            <button className={`setup-step ${integrations.some(i=>i.active&&i.configured)?"done":""}`} type="button" onClick={()=>onNavigate?.("integrations")}><span>{integrations.some(i=>i.active&&i.configured)?"✓":"2"}</span><div><b>Connect your tools</b><small>{config?.entitlements.liveIntegrations ? (integrations.some(i=>i.active&&i.configured)?`${integrations.filter(i=>i.active&&i.configured).length} connected`:"Optional — connect the systems customers need") : "Growth unlocks live integrations & AI actions"}</small></div></button>
+            <button className={`setup-step ${billing && ["active","trialing"].includes(billing.status)?"done":""}`} type="button" onClick={()=>onNavigate?.("billing")}><span>{billing && ["active","trialing"].includes(billing.status)?"✓":"3"}</span><div><b>Choose your plan</b><small>{billing?.status === "trialing"?"Free trial active":billing?.status === "active"?`${billing.plan} active`:"Complete subscription"}</small></div></button>
+            <button className="setup-step" type="button" onClick={()=>onNavigate?.("chatbot")}><span>4</span><div><b>Add ZoChat to your website</b><small>Copy one snippet when you are ready to go live</small></div></button>
           </div>
           {billing && <div className="usage-strip"><div><small>PLAN</small><b>{billing.plan === "unsubscribed"?"—":billing.plan}</b></div><div><small>CONVERSATIONS THIS MONTH</small><b>{billing.conversationsUsed.toLocaleString()} / {billing.conversationLimit.toLocaleString()}</b></div><div><small>INTEGRATIONS</small><b>{integrations.filter(i=>i.active&&i.configured).length} connected</b></div></div>}
         </Card>
@@ -73,7 +80,7 @@ export default function Overview({ tenantId, config, onNavigate }: { tenantId: s
       )}
 
       <Card>
-        <div className="section-head compact"><div><h2>Recent conversations</h2><p>Latest customer conversations across your widget.</p></div></div>
+        <div className="section-head compact"><div><h2>Latest customer conversations</h2><p>See what customers are asking and open any conversation for context.</p></div><button className="btn ghost sm" onClick={()=>onNavigate?.("inbox")}>Open inbox →</button></div>
         {data && data.recentConversations.length === 0 && (
           <div className="empty">No conversations yet. Install the widget and your customers will appear here.</div>
         )}

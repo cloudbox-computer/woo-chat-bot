@@ -71,19 +71,19 @@ export default function SettingsPage({
       <div className="page-head">
         <div>
           <h1>Settings</h1>
-          <p className="desc">Support, branding and tenant details.</p>
+          <p className="desc">Set the defaults your team and customers see across this workspace.</p>
         </div>
       </div>
 
       <Card className="section-card">
-        <div className="section-head"><div><h2>Support & tickets</h2><p>Configure how customer support requests are organised.</p></div></div>
+        <div className="section-head"><div><h2>When a customer needs your team</h2><p>Choose where support requests go and how ZoChat should organise them.</p></div></div>
         <Field label="Support email" hint="Tickets created by customers are emailed here.">
           <input type="email" value={supportEmail} onChange={(e) => setSupportEmail(e.target.value)} placeholder="support@yourstore.com" />
         </Field>
-        <Field label="Ticket reference prefix" hint="1-4 letters/numbers, e.g. IP → IP-2026-000001.">
+        <Field label="Support reference prefix" hint="1-4 letters/numbers, e.g. IP → IP-2026-000001.">
           <input type="text" value={ticketPrefix} onChange={(e) => setTicketPrefix(e.target.value.toUpperCase())} maxLength={4} placeholder="IP" />
         </Field>
-        <Field label="Default ticket priority">
+        <Field label="Default support priority">
           <select value={defaultPriority} onChange={(e) => setDefaultPriority(e.target.value)}>
             <option value="low">low</option>
             <option value="normal">normal</option>
@@ -91,7 +91,7 @@ export default function SettingsPage({
             <option value="urgent">urgent</option>
           </select>
         </Field>
-        <Field label="Auto-ticket categories" hint="Comma-separated — the assistant categorises tickets into these.">
+        <Field label="Support categories" hint="Comma-separated — the assistant categorises tickets into these.">
           <input type="text" value={categories} onChange={(e) => setCategories(e.target.value)} placeholder="damaged, refund, order query" />
         </Field>
         <Field label="Brand colour">
@@ -108,7 +108,7 @@ export default function SettingsPage({
       </Card>
 
       <Card className="section-card settings-onboarding-card">
-        <div className="section-head compact"><div><h2>Onboarding</h2><p>Current workspace onboarding state.</p></div></div>
+        <div className="section-head compact"><div><h2>Workspace setup</h2><p>Your initial ZoChat setup status.</p></div></div>
         <p className="muted settings-status-row">
           Onboarding status:{" "}
           <Badge tone={data.tenant.onboardingComplete ? "on" : "off"}>

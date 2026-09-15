@@ -16,17 +16,17 @@ import AgentPlatform from "./AgentPlatform";
 
 type Page = "overview" | "procedures" | "widgets" | "contacts" | "inbox" | "testing" | "analytics" | "backstage" | "channels" | "chatbot" | "knowledge" | "tickets" | "integrations" | "team" | "audit" | "operations" | "enterprise" | "billing" | "settings";
 
-const NAV: Array<{ id: Page; label: string }> = [
-  { id: "overview", label: "Home" },
-  { id: "chatbot", label: "Assistants" },
-  { id: "inbox", label: "Inbox" },
-  { id: "contacts", label: "Contacts" },
-  { id: "knowledge", label: "Knowledge" },
-  { id: "integrations", label: "Actions & Integrations" },
-  { id: "analytics", label: "Analytics" },
-  { id: "team", label: "Team" },
-  { id: "billing", label: "Billing" },
-  { id: "settings", label: "Settings" },
+const NAV: Array<{ id: Page; label: string; icon: string }> = [
+  { id: "overview", label: "Home", icon: "⌂" },
+  { id: "chatbot", label: "Assistants", icon: "✦" },
+  { id: "inbox", label: "Inbox", icon: "▣" },
+  { id: "contacts", label: "Customers", icon: "◎" },
+  { id: "knowledge", label: "Knowledge", icon: "▤" },
+  { id: "integrations", label: "Integrations", icon: "⌁" },
+  { id: "analytics", label: "Insights", icon: "↗" },
+  { id: "team", label: "Team", icon: "♙" },
+  { id: "billing", label: "Plan & billing", icon: "◇" },
+  { id: "settings", label: "Settings", icon: "⚙" },
 ];
 // Advanced platform routes remain valid for deep links, but are intentionally
 // not exposed as separate top-level concepts in the everyday navigation.
@@ -161,7 +161,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
       />
       <aside className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
         <div className="brand">
-          <span className="logo">◈</span> Assistant HQ
+          <span className="logo">◆</span> ZoChat
         </div>
 
         {/* Tenant Switcher */}
@@ -206,7 +206,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
               className={`nav-item ${page === n.id ? "active" : ""}`}
               onClick={() => navigateToPage(n.id)}
             >
-              {n.label}
+              <span className="nav-icon" aria-hidden="true">{n.icon}</span><span>{n.label}</span>
             </button>
           ))}
         </div>
@@ -268,7 +268,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
           <div className="mobile-topbar-brand">
             <span className="mobile-logo">◈</span>
             <div>
-              <strong>Assistant HQ</strong>
+              <strong>ZoChat</strong>
               <small>{tenant?.name || "Workspace"}</small>
             </div>
           </div>
@@ -279,7 +279,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
               <div className="page"><div className="card"><h1>Available on {requiredPlanForPage(page, config?.entitlements)}</h1><p className="desc">Your current plan does not include this feature. You can review the plan and, if eligible, start the 14-day trial from Billing. Nothing is charged today when a trial is available.</p><button className="btn primary" onClick={()=>navigateToPage("billing")}>View plan & trial</button></div></div>
             ) : (<>
               {page === "overview" && <Overview tenantId={selectedTenantId} config={config} onNavigate={(next)=>navigateToPage(next)} />}
-              {page === "chatbot" && <ChatbotPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} onUpgrade={()=>navigateToPage("billing")} />}
+              {page === "chatbot" && <ChatbotPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} onUpgrade={()=>navigateToPage("billing")} onNavigate={(next)=>navigateToPage(next as Page)} />}
               {page === "knowledge" && <KnowledgePage tenantId={selectedTenantId} />}
               {page === "tickets" && <TicketsPage tenantId={selectedTenantId} selectedTicketId={linkedTicketId} />}
               {page === "procedures" && <AgentPlatform tenantId={selectedTenantId} section="procedures" />}

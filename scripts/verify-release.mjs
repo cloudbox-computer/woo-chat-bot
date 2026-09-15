@@ -65,7 +65,7 @@ check('connector token refresh is persisted', connectorRuntime.includes('persist
 check('ZDR connector audit avoids transient conversation FK', tools.includes('auditConversationId') && text('supabase/functions/_shared/agent.ts').includes('persistConversation ? conversationId : undefined'));
 check('WordPress is a syncable data source', dataSources.includes('fromWordPress') && text('dashboard/src/pages/Knowledge.tsx').includes('wordpress'));
 check('connector action request/response limits', connectorRuntime.includes('256 KB safety limit') && connectorRuntime.includes('1 MB safety limit'));
-check('integration action catalogue UI present', text('dashboard/src/pages/Integrations.tsx').includes('Connected integration actions') && text('dashboard/src/pages/Integrations.tsx').includes('Native capability') && text('dashboard/src/pages/Integrations.tsx').includes('Connect securely'));
+check('integration action catalogue UI present', text('dashboard/src/pages/Integrations.tsx').includes('Available customer actions') && text('dashboard/src/pages/Integrations.tsx').includes('Ready to use') && text('dashboard/src/pages/Integrations.tsx').includes('Connect securely'));
 check('Supabase native actions visible', text('supabase/functions/_shared/connectors/registry.ts').includes('supabase_search_products') && text('supabase/functions/_shared/connectors/registry.ts').includes('supabase_search_business_data'));
 check('all connected integrations shown in actions tab', text('dashboard/src/pages/Integrations.tsx').includes('items.filter(i=>i.configured&&i.active)'));
 check('clean per-action AI tools', connectorRuntime.includes('connectorActionTools') && text('supabase/functions/_shared/agent.ts').includes('connectorModel.bindings'));
