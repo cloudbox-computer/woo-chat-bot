@@ -452,6 +452,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       const variantId = asStr(args.variantId);
       let variantName: string | undefined;
       let price = p.price;
+      if (!p.priceAvailable && !variantId) return { ok: false, text: `I found ${p.name}, but its current selling price is unavailable, so I can't add it to the cart yet.` };
       if (variantId) {
         const variants = await router.requireCatalogue().getVariants(productId);
         const v = variants.find((x) => x.id === variantId);
@@ -459,9 +460,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!v.inStock) return { ok: false, text: `${p.name} (${v.name}) is out of stock.` };
         variantName = v.name;
         if (v.price !== undefined) price = v.price;
+        else if (!p.priceAvailable) return { ok: false, text: `The selected option for ${p.name} does not have a confirmed selling price.` };
       }
 
-      const cart = await ctx.db.getCart(ctx.conversationId);
+      const cart = await ctx.db.getCart(ctx.conversationId, ctx.tenant.id, ctx.customerEmail);
       const existing = cart.find(
         (i) => String(i.productId) === String(productId) && (i.variantId ?? null) === (variantId ?? null),
       );
@@ -481,11 +483,11 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           inStock: true, // guarded above: out-of-stock already returned
         });
       }
-      await ctx.db.setCart(ctx.conversationId, cart);
+      await ctx.db.setCart(ctx.conversationId, cart, ctx.tenant.id, ctx.customerEmail);
       return { ok: true, text: `Added to cart: ${qty}× ${p.name}${variantName ? ` (${variantName})` : ""}.\n${summarizeCart(cart, ctx.tenant.currency)}`, products: cartToProducts(cart) };
     }
     case "view_cart": {
-      const cart = await ctx.db.getCart(ctx.conversationId);
+      const cart = await ctx.db.getCart(ctx.conversationId, ctx.tenant.id, ctx.customerEmail);
       if (!cart.length) return { ok: true, text: "Your cart is empty. Would you like me to find something for you?" };
       // Expose cart items as products so the output gate can recognise the
       // product names the model will quote (avoids false off-topic refusals
@@ -497,7 +499,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       if (!ctx.customerEmail) {
         return { ok: false, text: "I need your email address to proceed with checkout. Could you please share it?" };
       }
-      const cart = await ctx.db.getCart(ctx.conversationId);
+      const cart = await ctx.db.getCart(ctx.conversationId, ctx.tenant.id, ctx.customerEmail);
       if (!cart.length) return { ok: false, text: "Your cart is empty — nothing to check out yet." };
       const url = await router.requireCheckout().buildCheckoutUrl(cart, ctx.customerEmail);
       return { ok: true, text: `You have ${cart.length} item${cart.length === 1 ? "" : "s"} ready to check out. Complete your order here: ${url}`, products: cartToProducts(cart) };
@@ -943,7 +945,7 @@ function asRecord(v: unknown): Record<string, string> | undefined {
 export function summarizeProducts(products: Product[], currency: string): string {
   const sym = currency === "GBP" ? "£" : currency === "USD" ? "$" : currency + " ";
   return products
-    .map((p) => `- ${p.name} — ${sym}${p.price.toFixed(2)}${p.inStock === false ? " (out of stock)" : ""} (id ${p.id})`)
+    .map((p) => `- ${p.name} — ${p.priceAvailable === false ? "Price unavailable" : `${sym}${p.price.toFixed(2)}`}${p.inStock === false ? " (out of stock)" : ""} (id ${p.id})`)
     .join("\n");
 }
 
@@ -952,7 +954,7 @@ export function describeProduct(p: Product, currency: string): string {
   const attrs = Object.entries(p.attributes ?? {})
     .map(([k, v]) => `${k}: ${v}`)
     .join(", ");
-  return `${p.name} — ${sym}${p.price.toFixed(2)}${p.inStock === false ? " (currently out of stock)" : " (in stock)"}
+  return `${p.name} — ${p.priceAvailable === false ? "Price unavailable" : `${sym}${p.price.toFixed(2)}`}${p.inStock === false ? " (currently out of stock)" : " (in stock)"}
 ${p.description ?? ""}
 ${attrs ? `Attributes: ${attrs}` : ""}`;
 }

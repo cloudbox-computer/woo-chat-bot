@@ -58,7 +58,10 @@ export interface Product {
   id: string | number;
   name: string;
   price: number;
+  priceAvailable?: boolean;
+  priceMax?: number;
   currency?: string;
+  variants?: Array<{ id: string; name: string; price?: number; inStock: boolean; attributes?: Record<string,string> }>;
   url?: string;
   imageUrl?: string;
   inStock?: boolean;
@@ -303,6 +306,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
   const [showEmailPrompt, setShowEmailPrompt] = useState(false);
   const [pendingEmailAction, setPendingEmailAction] = useState<string | null>(null);
   const [emailInput, setEmailInput] = useState("");
+  const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>({});
 
   // Load persisted customer email from localStorage on mount
   const [storedEmail, setStoredEmail] = useState<string>(() => {
@@ -454,16 +458,21 @@ export function Widget({ config }: { config: WidgetConfig }) {
   }
 
   function handleAddToCart(product: Product) {
-    // Check if user has email configured or stored
+    const availableVariants = (product.variants ?? []).filter((v) => v.inStock);
+    const variantId = selectedVariants[String(product.id)];
+    if (availableVariants.length > 1 && !variantId) return;
+    const selected = variantId || (availableVariants.length === 1 ? availableVariants[0].id : undefined);
+    const action = `Add ${product.name} (product ${product.id})${selected ? ` variant ${selected}` : ""} to my cart`;
     if (!effectiveEmail) {
-      setPendingEmailAction(`Add ${product.name} (product ${product.id}) to my cart`);
+      setPendingEmailAction(action);
       setShowEmailPrompt(true);
       return;
     }
-    send(`Add ${product.name} (product ${product.id}) to my cart`);
+    send(action);
   }
 
   function handleSubmitEmail(email: string) {
+    if (!EMAIL_RE.test(email)) return;
     setShowEmailPrompt(false);
     setEmailInput("");
     // Persist email to localStorage for this conversation
@@ -834,9 +843,15 @@ export function Widget({ config }: { config: WidgetConfig }) {
                       {p.imageUrl ? <img className="zochat-product-image" src={p.imageUrl} alt={p.name} loading="lazy" style={s.cardImg} onError={(e)=>{e.currentTarget.style.display="none"}} /> : <div className="zochat-product-image-placeholder" style={{...s.cardImg,display:"grid",placeItems:"center",fontSize:18,color:COLORS.muted,background:"#f7f7f5"}}>◇</div>}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <p style={s.cardName}>{p.name}</p>
-                        <p style={s.cardPrice}>{sym(p.currency)}{p.price.toFixed(2)}</p>
+                        <p style={s.cardPrice}>{p.priceAvailable === false ? "Price unavailable" : `${p.priceMax !== undefined && p.priceMax > p.price ? "From " : ""}${sym(p.currency)}${p.price.toFixed(2)}`}</p>
+                        {(p.variants ?? []).filter((v) => v.inStock).length > 1 ? (
+                          <select aria-label={`Choose an option for ${p.name}`} value={selectedVariants[String(p.id)] ?? ""} onChange={(e) => setSelectedVariants((old) => ({ ...old, [String(p.id)]: e.target.value }))} style={{ width: "100%", marginBottom: 8, border: "1px solid rgba(15,23,42,.12)", borderRadius: 10, padding: "8px 9px", background: "#fff" }}>
+                            <option value="">Choose an option</option>
+                            {(p.variants ?? []).filter((v) => v.inStock).map((v) => <option key={v.id} value={v.id}>{v.name}{v.price !== undefined ? ` — ${sym(p.currency)}${v.price.toFixed(2)}` : ""}</option>)}
+                          </select>
+                        ) : null}
                         <div style={s.cardActions}>
-                          <button className="zochat-product-btn" style={s.cardBtn} onClick={() => handleAddToCart(p)}>Add to cart</button>
+                          <button className="zochat-product-btn" style={s.cardBtn} onClick={() => handleAddToCart(p)} disabled={p.priceAvailable === false || ((p.variants ?? []).filter((v) => v.inStock).length > 1 && !selectedVariants[String(p.id)])}>{p.priceAvailable === false ? "Unavailable" : "Add to cart"}</button>
                           {p.url ? <a style={s.cardLink} href={p.url} target="_blank" rel="noreferrer">View →</a> : null}
                         </div>
                       </div>

@@ -12,7 +12,7 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 type FieldMap = Record<string, string>;
 type ResourceMap = {
-  table: string;
+  table?: string;
   fields?: FieldMap;
   identityColumn?: string;
   public?: boolean;
@@ -97,138 +97,150 @@ class SupabaseRest {
     const body = await res.json();
     return Array.isArray(body) ? body as Record<string, unknown>[] : [];
   }
+
+  async schema(): Promise<Record<string, string[]>> {
+    const res = await fetch(`${this.url.replace(/\/$/, "")}/rest/v1/`, {
+      headers: { apikey: this.anonKey, Authorization: `Bearer ${this.anonKey}`, Accept: "application/openapi+json" },
+    });
+    if (!res.ok) throw new Error(`Connected schema discovery returned ${res.status}`);
+    const doc = await res.json() as Record<string, unknown>;
+    const defs = ((doc.definitions ?? (doc.components as any)?.schemas) ?? {}) as Record<string, any>;
+    const out: Record<string, string[]> = {};
+    for (const [name, def] of Object.entries(defs)) {
+      if (!safeIdent(name) || !def || typeof def !== "object") continue;
+      const props = def.properties && typeof def.properties === "object" ? Object.keys(def.properties) : [];
+      if (props.length) out[name] = props.filter((x) => !!safeIdent(x));
+    }
+    return out;
+  }
+
 }
 
 export class SupabaseCatalogueProvider implements CatalogueProvider {
   readonly providerId = "supabase";
   private rest: SupabaseRest;
+  private resolved?: Promise<{ product: ResourceMap; variant?: ResourceMap }>;
 
   constructor(private tenant: Tenant, private map: ResourceMap) {
     if (!tenant.supabaseUrl || !tenant.supabaseAnonKey) throw new Error("Supabase connection is incomplete");
     this.rest = new SupabaseRest(tenant.supabaseUrl, tenant.supabaseAnonKey);
   }
 
-  private hasExplicitFieldMap(): boolean {
-    return !!this.map.fields && Object.keys(this.map.fields).length > 0;
+  private scoreTable(name: string, cols: string[]): number {
+    const n = name.toLowerCase(); const c = new Set(cols.map((x) => x.toLowerCase())); let score = 0;
+    if (/product|catalog|item|merch/.test(n)) score += 7;
+    if (/variant|sku|option/.test(n)) score -= 4;
+    if (["name","title","product_name"].some((x) => c.has(x))) score += 5;
+    if (["description","short_description","summary"].some((x) => c.has(x))) score += 2;
+    if (["image_url","image","images","featured_image"].some((x) => c.has(x))) score += 2;
+    if (["price","sale_price","selling_price","retail_price","unit_price"].some((x) => c.has(x))) score += 1;
+    return score;
   }
 
-  private selectFields(): string[] {
-    if (!this.hasExplicitFieldMap()) return ["*"];
-    const mapped = Object.values(this.map.fields ?? {}).map(safeIdent).filter(Boolean) as string[];
-    for (const required of [field(this.map, "id", "id"), field(this.map, "name", "name"), field(this.map, "price", "price")]) {
-      if (safeIdent(required)) mapped.push(required);
-    }
-    return Array.from(new Set(mapped));
-  }
-
-  private pick(row: Record<string, unknown>, logical: string, fallbacks: string[]): unknown {
-    const explicit = safeIdent(this.map.fields?.[logical]);
-    if (explicit && Object.prototype.hasOwnProperty.call(row, explicit)) return row[explicit];
-    for (const key of fallbacks) {
-      if (Object.prototype.hasOwnProperty.call(row, key) && row[key] !== null && row[key] !== undefined) return row[key];
-    }
+  private inferField(cols: string[], logical: string): string | undefined {
+    const aliases: Record<string,string[]> = {
+      id:["id","product_id","item_id","sku"], name:["name","title","product_name","item_name"],
+      description:["description","short_description","summary","details"], category:["category","category_name","type","collection"],
+      url:["url","permalink","product_url","link","slug"], image_url:["image_url","image","images","image_urls","featured_image","thumbnail","media"],
+      price:["price","sale_price","selling_price","retail_price","unit_price","amount"], currency:["currency","currency_code"],
+      in_stock:["in_stock","available","is_available","active","stock_status"], stock_quantity:["stock_quantity","stock","quantity","inventory_quantity","qty"],
+      product_fk:["product_id","item_id","parent_id","catalogue_id","catalog_id"], sku:["sku","variant_sku"],
+      variant_name:["name","title","variant_name","option_name"], size:["size","ring_size"], colour:["colour","color"],
+    };
+    const lower = new Map(cols.map((x)=>[x.toLowerCase(),x]));
+    for (const a of aliases[logical] ?? []) if (lower.has(a)) return lower.get(a);
     return undefined;
   }
 
-  private toProduct(row: Record<string, unknown>): Product {
-    const rawId = this.pick(row, "id", ["id", "product_id", "productId", "sku"]);
-    const rawName = this.pick(row, "name", ["name", "title", "product_name", "productName"]);
-    const rawPrice = this.pick(row, "price", ["price", "sale_price", "regular_price", "amount", "unit_price"]);
-    const rawCurrency = this.pick(row, "currency", ["currency", "currency_code"]);
-    const rawDescription = this.pick(row, "description", ["description", "short_description", "summary"]);
-    const rawCategory = this.pick(row, "category", ["category", "category_name", "type"]);
-    const rawUrl = this.pick(row, "url", ["url", "permalink", "product_url", "link"]);
-    const rawImage = this.pick(row, "image_url", [
-      "image_url", "imageUrl", "image", "images", "image_urls", "featured_image", "featuredImage",
-      "thumbnail", "thumbnail_url", "gallery", "media"
-    ]);
-    const rawStock = this.pick(row, "in_stock", ["in_stock", "available", "is_available", "active", "is_active", "stock_status"]);
-    const rawQty = this.pick(row, "stock_quantity", ["stock_quantity", "stock", "quantity", "inventory_quantity"]);
+  private async resolve(): Promise<{ product: ResourceMap; variant?: ResourceMap }> {
+    if (this.resolved) return this.resolved;
+    this.resolved = (async () => {
+      if (safeIdent(this.map.table) && this.map.fields && Object.keys(this.map.fields).length) return { product: this.map };
+      let schema: Record<string,string[]> = {};
+      try { schema = await this.rest.schema(); } catch { /* conventional fallback below */ }
+      const configured = safeIdent(this.map.table);
+      const productTable = configured && schema[configured] ? configured
+        : Object.entries(schema).sort((a,b)=>this.scoreTable(b[0],b[1])-this.scoreTable(a[0],a[1]))[0]?.[0]
+          ?? configured ?? "products";
+      const productCols = schema[productTable] ?? [];
+      const fields: FieldMap = { ...(this.map.fields ?? {}) };
+      for (const logical of ["id","name","description","category","url","image_url","price","currency","in_stock","stock_quantity"]) {
+        const found = this.inferField(productCols, logical); if (!fields[logical] && found) fields[logical] = found;
+      }
+      const product: ResourceMap = { ...this.map, table: productTable, fields };
+      const productId = fields.id ?? "id";
+      let bestVariant: {score:number,map:ResourceMap}|undefined;
+      for (const [table, cols] of Object.entries(schema)) {
+        if (table === productTable) continue;
+        const price = this.inferField(cols,"price"); const fk = this.inferField(cols,"product_fk");
+        if (!price || !fk) continue;
+        let score = (/variant|sku|option|price|inventory/.test(table.toLowerCase()) ? 6 : 0) + 5;
+        if (this.inferField(cols,"sku")) score += 2; if (this.inferField(cols,"stock_quantity")) score += 2;
+        const vf:FieldMap = { product_fk:fk, price };
+        for (const logical of ["id","variant_name","sku","currency","in_stock","stock_quantity","size","colour"]) { const found=this.inferField(cols,logical); if(found) vf[logical]=found; }
+        if (!bestVariant || score > bestVariant.score) bestVariant={score,map:{table,fields:vf,identityColumn:productId,maxRows:250}};
+      }
+      return { product, variant: bestVariant?.map };
+    })();
+    return this.resolved;
+  }
 
-    let inStock = bool(rawStock);
-    if (inStock === undefined && typeof rawStock === "string") {
-      const v = rawStock.trim().toLowerCase();
-      if (["instock", "in_stock", "available", "active"].includes(v)) inStock = true;
-      if (["outofstock", "out_of_stock", "unavailable", "inactive"].includes(v)) inStock = false;
-    }
+  private pick(row: Record<string, unknown>, map: ResourceMap, logical: string, fallbacks: string[]): unknown {
+    const explicit = safeIdent(map.fields?.[logical]);
+    if (explicit && Object.prototype.hasOwnProperty.call(row, explicit)) return row[explicit];
+    for (const key of fallbacks) if (Object.prototype.hasOwnProperty.call(row,key) && row[key] != null) return row[key];
+    return undefined;
+  }
 
+  private baseProduct(row: Record<string,unknown>, map: ResourceMap): Product {
+    const rawPrice=this.pick(row,map,"price",["price","sale_price","selling_price","retail_price","unit_price","amount"]); const parsed=num(rawPrice);
+    const rawStock=this.pick(row,map,"in_stock",["in_stock","available","is_available","active","stock_status"]); let inStock=bool(rawStock);
+    if(inStock===undefined && typeof rawStock==="string"){const v=rawStock.toLowerCase();if(["instock","in_stock","available","active"].includes(v))inStock=true;if(["outofstock","out_of_stock","unavailable","inactive"].includes(v))inStock=false;}
     return {
-      id: (rawId as string | number) ?? "",
-      name: str(rawName) ?? "Unnamed product",
-      price: num(rawPrice) ?? 0,
-      currency: str(rawCurrency) ?? this.tenant.currency,
-      description: str(rawDescription),
-      category: str(rawCategory),
-      url: str(rawUrl),
-      imageUrl: imageUrl(rawImage),
-      inStock,
-      stockQuantity: num(rawQty),
+      id:(this.pick(row,map,"id",["id","product_id","item_id","sku"]) as string|number)??"",
+      name:str(this.pick(row,map,"name",["name","title","product_name","item_name"]))??"Unnamed product",
+      price:parsed ?? 0, priceAvailable: parsed !== undefined,
+      currency:str(this.pick(row,map,"currency",["currency","currency_code"]))??this.tenant.currency,
+      description:str(this.pick(row,map,"description",["description","short_description","summary","details"])),
+      category:str(this.pick(row,map,"category",["category","category_name","type","collection"])),
+      url:str(this.pick(row,map,"url",["url","permalink","product_url","link"])),
+      imageUrl:imageUrl(this.pick(row,map,"image_url",["image_url","image","images","featured_image","thumbnail","media"])),
+      inStock, stockQuantity:num(this.pick(row,map,"stock_quantity",["stock_quantity","stock","quantity","inventory_quantity","qty"])),
     };
   }
 
-  private matchesLocalFilters(product: Product, input: ProductSearchInput): boolean {
-    if (input.query) {
-      const q = input.query.trim().toLowerCase();
-      if (q) {
-        const hay = `${product.name} ${product.description ?? ""} ${product.category ?? ""}`.toLowerCase();
-        const words = q.split(/\s+/).filter(Boolean);
-        if (!words.every((w) => hay.includes(w))) return false;
-      }
-    }
-    if (input.minPrice !== undefined && product.price < input.minPrice) return false;
-    if (input.maxPrice !== undefined && product.price > input.maxPrice) return false;
-    if (input.category && !(product.category ?? "").toLowerCase().includes(input.category.toLowerCase())) return false;
-    return true;
+  private async variants(productId:string|number, map:ResourceMap):Promise<ProductVariant[]> {
+    const table=safeIdent(map.table), fk=safeIdent(map.fields?.product_fk); if(!table||!fk)return[];
+    const p=new URLSearchParams({select:"*",limit:String(Math.min(map.maxRows??100,250))}); p.set(fk,`eq.${String(productId).replace(/[,()]/g,"")}`);
+    const rows=await this.rest.query(table,p); return rows.map((r,i)=>{
+      const price=num(this.pick(r,map,"price",["price","sale_price","selling_price","retail_price","unit_price","amount"]));
+      const qty=num(this.pick(r,map,"stock_quantity",["stock_quantity","stock","quantity","inventory_quantity","qty"]));
+      const rawStock=this.pick(r,map,"in_stock",["in_stock","available","is_available","stock_status"]); let inStock=bool(rawStock); if(inStock===undefined&&qty!==undefined)inStock=qty>0; if(inStock===undefined)inStock=true;
+      const attrs:Record<string,string>={}; for(const logical of ["size","colour"]){const v=this.pick(r,map,logical,[logical,logical==="colour"?"color":"ring_size"]);if(v!=null)attrs[logical]=String(v);}
+      const id=this.pick(r,map,"id",["id","variant_id","sku"]); const name=this.pick(r,map,"variant_name",["name","title","variant_name"]);
+      return {id:String(id??`${productId}:${i}`),name:str(name) ?? (Object.values(attrs).join(" / ") || `Option ${i+1}`),price,inStock,attributes:Object.keys(attrs).length?attrs:undefined};
+    });
   }
 
-  async searchProducts(input: ProductSearchInput): Promise<Product[]> {
-    const table = safeIdent(this.map.table);
-    if (!table) throw new Error("Catalogue mapping is invalid");
-    const p = new URLSearchParams();
-    p.set("select", this.selectFields().join(","));
-    p.set("limit", String(Math.min(Math.max(1, this.map.maxRows ?? 100), 250)));
-
-    // Only push filters into PostgREST when the tenant supplied an explicit
-    // field map. With the conventional `products` table we deliberately fetch
-    // a bounded result set and normalise/filter locally so schemas using title,
-    // product_name, sale_price, etc. work without provider-specific AI logic.
-    if (this.hasExplicitFieldMap()) {
-      const nameCol = field(this.map, "name", "name");
-      const priceCol = field(this.map, "price", "price");
-      const categoryCol = field(this.map, "category", "category");
-      if (input.query) p.set(nameCol, `ilike.*${input.query.replace(/[%*,()]/g, "")}*`);
-      if (input.minPrice !== undefined) p.append(priceCol, `gte.${input.minPrice}`);
-      if (input.maxPrice !== undefined) p.append(priceCol, `lte.${input.maxPrice}`);
-      if (input.category) p.set(categoryCol, `ilike.*${input.category.replace(/[%*,()]/g, "")}*`);
-      for (const [logical, value] of Object.entries(input.attributes ?? {})) {
-        const col = safeIdent(this.map.fields?.[logical]);
-        if (col) p.set(col, `eq.${String(value).replace(/[,()]/g, "")}`);
-      }
-    }
-
-    const products = (await this.rest.query(table, p))
-      .map((r) => this.toProduct(r))
-      .filter((p) => p.id !== "" && p.name !== "Unnamed product");
-    return this.hasExplicitFieldMap() ? products : products.filter((product) => this.matchesLocalFilters(product, input));
+  private async hydrate(row:Record<string,unknown>, resolved:{product:ResourceMap;variant?:ResourceMap}):Promise<Product>{
+    const p=this.baseProduct(row,resolved.product); if(resolved.variant){const vs=await this.variants(p.id,resolved.variant);p.variants=vs;if(vs.length){const prices=vs.map(v=>v.price).filter((x):x is number=>x!==undefined&&Number.isFinite(x));if(prices.length){p.price=Math.min(...prices);p.priceMax=Math.max(...prices);p.priceAvailable=true;}if(p.inStock===undefined)p.inStock=vs.some(v=>v.inStock);}} return p;
   }
 
-  async getProduct(id: string | number): Promise<Product | null> {
-    const table = safeIdent(this.map.table);
-    if (!table) return null;
-    if (!this.hasExplicitFieldMap()) {
-      const products = await this.searchProducts({});
-      return products.find((p) => String(p.id) === String(id)) ?? null;
-    }
-    const p = new URLSearchParams();
-    p.set("select", this.selectFields().join(","));
-    p.set(field(this.map, "id", "id"), `eq.${String(id).replace(/[,()]/g, "")}`);
-    p.set("limit", "1");
-    const rows = await this.rest.query(table, p);
-    return rows[0] ? this.toProduct(rows[0]) : null;
+  private matches(p:Product,input:ProductSearchInput):boolean{
+    if(input.query){const q=input.query.toLowerCase().trim();const hay=`${p.name} ${p.description??""} ${p.category??""}`.toLowerCase();if(q&&!q.split(/\s+/).filter(Boolean).every(w=>hay.includes(w)))return false;}
+    if(input.minPrice!==undefined && (!p.priceAvailable || p.price<input.minPrice))return false;
+    if(input.maxPrice!==undefined && (!p.priceAvailable || p.price>input.maxPrice))return false;
+    if(input.category && !(p.category??p.name).toLowerCase().includes(input.category.toLowerCase()))return false; return true;
   }
 
-  async getVariants(_productId: string | number): Promise<ProductVariant[]> { return []; }
-  async listProducts(): Promise<Product[]> { return this.searchProducts({}); }
+  async searchProducts(input:ProductSearchInput):Promise<Product[]>{
+    const r=await this.resolve(); const table=safeIdent(r.product.table); if(!table)throw new Error("Catalogue discovery could not identify a product source");
+    const q=new URLSearchParams({select:"*",limit:String(Math.min(Math.max(1,r.product.maxRows??100),250))});
+    const rows=await this.rest.query(table,q); const out:Product[]=[]; for(const row of rows){const p=await this.hydrate(row,r);if(p.id!==""&&p.name!=="Unnamed product"&&this.matches(p,input))out.push(p);} return out;
+  }
+  async getProduct(id:string|number):Promise<Product|null>{const r=await this.resolve();const table=safeIdent(r.product.table);if(!table)return null;const idCol=safeIdent(r.product.fields?.id)??"id";const q=new URLSearchParams({select:"*",limit:"1"});q.set(idCol,`eq.${String(id).replace(/[,()]/g,"")}`);const rows=await this.rest.query(table,q);return rows[0]?this.hydrate(rows[0],r):null;}
+  async getVariants(productId:string|number):Promise<ProductVariant[]>{const r=await this.resolve();return r.variant?this.variants(productId,r.variant):[];}
+  async listProducts():Promise<Product[]>{return this.searchProducts({});}
 }
 
 export class SupabaseOrdersProvider implements OrdersProvider {

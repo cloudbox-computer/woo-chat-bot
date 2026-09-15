@@ -120,6 +120,8 @@ create table if not exists feedback (
 -- it on reload and the AI never needs client-side state.
 create table if not exists carts (
   conversation_id uuid primary key references conversations(id) on delete cascade,
+  tenant_id       uuid references tenants(id) on delete cascade,
+  customer_email  text,
   items           jsonb not null default '[]'::jsonb,  -- CartItem[]
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()

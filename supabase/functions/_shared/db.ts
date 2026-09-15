@@ -24,8 +24,8 @@ export interface Db {
   getMessages(conversationId: string): Promise<Message[]>;
   appendMessage(m: Message): Promise<void>;
   logFeedback(f: Feedback): Promise<void>;
-  getCart(conversationId: string): Promise<CartItem[]>;
-  setCart(conversationId: string, items: CartItem[]): Promise<void>;
+  getCart(conversationId: string, tenantId?: string, customerEmail?: string): Promise<CartItem[]>;
+  setCart(conversationId: string, items: CartItem[], tenantId?: string, customerEmail?: string): Promise<void>;
   nextTicketReference(tenantId: string, prefix: string): Promise<string>;
   createTicket(t: Ticket): Promise<Ticket>;
   getTicketByReference(tenantId: string, reference: string): Promise<Ticket | null>;
@@ -104,11 +104,13 @@ export class MemoryDb implements Db {
   async logFeedback(f: Feedback): Promise<void> {
     this.feedback.push(f);
   }
-  async getCart(conversationId: string): Promise<CartItem[]> {
-    return this.carts.get(conversationId) ?? [];
+  async getCart(conversationId: string, tenantId?: string, customerEmail?: string): Promise<CartItem[]> {
+    const key = tenantId && customerEmail ? `${tenantId}:${customerEmail.trim().toLowerCase()}` : conversationId;
+    return this.carts.get(key) ?? [];
   }
-  async setCart(conversationId: string, items: CartItem[]): Promise<void> {
-    this.carts.set(conversationId, items);
+  async setCart(conversationId: string, items: CartItem[], tenantId?: string, customerEmail?: string): Promise<void> {
+    const key = tenantId && customerEmail ? `${tenantId}:${customerEmail.trim().toLowerCase()}` : conversationId;
+    this.carts.set(key, items);
   }
   async nextTicketReference(tenantId: string, prefix: string): Promise<string> {
     const year = new Date().getFullYear(); const seq = this.tickets.filter(t=>t.tenantId===tenantId && t.reference.startsWith(`${prefix}-${year}-`)).length + 1;
@@ -449,68 +451,40 @@ export class SupabaseDb implements Db {
     });
   }
 
-  async getCart(conversationId: string): Promise<CartItem[]> {
-    const rows = await this.get<Record<string, unknown>>("carts", {
-      select: "items",
-      conversation_id: `eq.${conversationId}`,
-      limit: "1",
-    });
-    const items = rows[0]?.items;
-    // Legacy rows may hold a jsonb *string* containing the JSON array (old
-    // setCart double-encoded with JSON.stringify). Parse those defensively.
-    if (typeof items === "string") {
-      try {
-        const parsed = JSON.parse(items);
-        return Array.isArray(parsed) ? (parsed as CartItem[]) : [];
-      } catch {
-        return [];
-      }
+  async getCart(conversationId: string, tenantId?: string, customerEmail?: string): Promise<CartItem[]> {
+    const email = customerEmail?.trim().toLowerCase();
+    const params: Record<string, string> = { select: "items", limit: "1" };
+    if (tenantId && email) {
+      params.tenant_id = `eq.${tenantId}`;
+      params.customer_email = `eq.${email}`;
+    } else {
+      params.conversation_id = `eq.${conversationId}`;
     }
-    if (!Array.isArray(items)) return [];
-    return items as CartItem[];
+    const rows = await this.get<Record<string, unknown>>("carts", params);
+    const items = rows[0]?.items;
+    if (typeof items === "string") {
+      try { const parsed = JSON.parse(items); return Array.isArray(parsed) ? parsed as CartItem[] : []; } catch { return []; }
+    }
+    return Array.isArray(items) ? items as CartItem[] : [];
   }
 
-  async setCart(conversationId: string, items: CartItem[]): Promise<void> {
-    const existing = await this.get<Record<string, unknown>>("carts", {
-      select: "conversation_id",
-      conversation_id: `eq.${conversationId}`,
-      limit: "1",
-    });
+  async setCart(conversationId: string, items: CartItem[], tenantId?: string, customerEmail?: string): Promise<void> {
+    const email = customerEmail?.trim().toLowerCase();
+    const identity = tenantId && email
+      ? `tenant_id=eq.${encodeURIComponent(tenantId)}&customer_email=eq.${encodeURIComponent(email)}`
+      : `conversation_id=eq.${encodeURIComponent(conversationId)}`;
+    const existing = await this.get<Record<string, unknown>>("carts", tenantId && email
+      ? { select: "conversation_id", tenant_id: `eq.${tenantId}`, customer_email: `eq.${email}`, limit: "1" }
+      : { select: "conversation_id", conversation_id: `eq.${conversationId}`, limit: "1" });
     if (existing.length) {
-      const res = await fetch(`${this.base}/carts?conversation_id=eq.${conversationId}`, {
-        method: "PATCH",
-        headers: { ...this.headers, Prefer: "return=minimal" },
-        // Send the array directly so PostgREST stores it as a jsonb array
-        // (not a double-encoded jsonb string).
-        body: JSON.stringify({ items, updated_at: new Date().toISOString() }),
+      const res = await fetch(`${this.base}/carts?${identity}`, {
+        method: "PATCH", headers: { ...this.headers, Prefer: "return=minimal" },
+        body: JSON.stringify({ items, conversation_id: conversationId, updated_at: new Date().toISOString() }),
       });
       if (!res.ok) throw new Error(`DB cart update: ${res.status} ${await res.text()}`);
     } else {
-      await this.insert("carts", {
-        conversation_id: conversationId,
-        items, // raw array -> jsonb array
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
+      await this.insert("carts", { conversation_id: conversationId, tenant_id: tenantId ?? null, customer_email: email ?? null, items, updated_at: new Date().toISOString() });
     }
-  }
-
-  private mapTicket(row: Record<string, unknown>): Ticket {
-    return {
-      id: String(row.id),
-      tenantId: String(row.tenant_id),
-      reference: String(row.reference),
-      conversationId: row.conversation_id ? String(row.conversation_id) : undefined,
-      customerName: row.customer_name ? String(row.customer_name) : undefined,
-      customerEmail: String(row.customer_email),
-      subject: String(row.subject),
-      description: String(row.description),
-      category: row.category as Ticket["category"],
-      priority: (row.priority ?? "normal") as Ticket["priority"],
-      status: (row.status ?? "open") as Ticket["status"],
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at),
-    };
   }
 
   async nextTicketReference(tenantId: string, prefix: string): Promise<string> {

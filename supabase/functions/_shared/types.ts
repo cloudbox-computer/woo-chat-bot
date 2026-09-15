@@ -174,6 +174,9 @@ export interface Product {
   id: string | number;
   name: string;
   price: number;
+  /** False when the connected catalogue has no trustworthy sell price. Never render this as £0. */
+  priceAvailable?: boolean;
+  priceMax?: number;
   currency: string;
   description?: string;
   category?: string;
@@ -191,6 +194,9 @@ export interface CartItem {
   variantId?: string;
   variantName?: string;
   price: number;
+  /** False when the connected catalogue has no trustworthy sell price. Never render this as £0. */
+  priceAvailable?: boolean;
+  priceMax?: number;
   currency: string;
   quantity: number;
   url?: string;

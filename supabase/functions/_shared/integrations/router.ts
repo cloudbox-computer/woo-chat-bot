@@ -103,7 +103,7 @@ export function createIntegrationRouter(tenant: Tenant): IntegrationRouter {
     // always wins and is required for non-standard table names.
     const catalogueConfig = config.catalogue?.table
       ? config.catalogue
-      : { table: "products", preferred: true, maxRows: 100 };
+      : { preferred: true, maxRows: 100 };
 
     if (catalogueConfig.table && (!registry.catalogue || catalogueConfig.preferred === true)) {
       registry.catalogue = new SupabaseCatalogueProvider(tenant, catalogueConfig);
