@@ -28,6 +28,8 @@ export interface RuntimeActionAccess {
   safeCustomerWrites: boolean;
   privilegedWrites: boolean;
   restrictedGrants: boolean;
+  /** Scale-only. When false, tenant-created/custom action definitions are excluded even if they remain stored after a downgrade. */
+  customActions: boolean;
 }
 
 const actionSeedCache = new Map<string, number>();
@@ -74,6 +76,9 @@ export async function listRuntimeActions(tenantId:string,chatbotId:string,access
     }
   }
   return scoped.filter(action=>{
+    // Downgrades take effect at runtime: custom actions may remain stored so an
+    // upgrade can restore them, but Growth must never execute Scale-only actions.
+    if(!access.customActions && !isBuiltInAction(action.provider,action.name,action.method,action.path_template))return false;
     if(isReadLike(action))return access.read;
     if(access.privilegedWrites)return true;
     if(access.safeCustomerWrites && isCustomerSafeBuiltInWrite(action))return true;

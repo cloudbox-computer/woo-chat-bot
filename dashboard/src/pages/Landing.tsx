@@ -11,7 +11,7 @@ const outcomes = [
 
 const plans = [
   { key:"starter" as const,name:"Starter",price:"£29",desc:"Start answering customer questions 24/7.",items:["1 assistant","500 conversations / month","Website chat & knowledge","Customer support tickets","Your branding"] },
-  { key:"growth" as const,name:"Growth",price:"£79",desc:"Let ZoChat work with the systems your team already uses.",popular:true,items:["3 assistants","2,500 conversations / month","Everything in Starter","Live integrations & business actions","Workflows and rich chat experiences","Team access & human takeover","Customer insights"] },
+  { key:"growth" as const,name:"Growth",price:"£79",desc:"Let ZoChat work with the systems your team already uses.",popular:true,items:["3 assistants","2,500 conversations / month","Everything in Starter","Live integrations & business actions","Workflows and rich chat experiences","Assistant testing","Team access & human takeover","Customer insights"] },
   { key:"scale" as const,name:"Scale",price:"£199",desc:"For larger teams, agencies and advanced automation.",items:["10 assistants","10,000 conversations / month","Everything in Growth","Custom API actions","Advanced permissions","Audit & operations controls","Higher usage limits"] },
 ];
 
@@ -21,7 +21,7 @@ const faqs = [
   ["Can it use my live business data?","Yes, on plans that include live integrations. ZoChat can use server-side, permission-controlled actions for connected commerce, CRM, scheduling, support, messaging, email, automation and data systems."],
   ["Can customers buy or book through chat?","When the connected system supports it, ZoChat can show rich product or booking experiences and run approved actions. Availability depends on the integration and permissions you connect."],
   ["What if the AI cannot solve something?","You decide its boundaries. It can explain that it does not have the answer, collect the right details, create a support request or hand the conversation to a person when your plan and setup support it."],
-  ["Can I test it before customers use it?","Yes. ZoChat includes testing so you can save important customer questions and expected behaviour, then re-check them as you change knowledge, workflows and integrations."],
+  ["Can I test it before customers use it?","Yes. Growth and Scale include saved assistant testing so you can keep important customer questions and expected behaviour, then re-check them as you change knowledge, workflows and integrations."],
   ["Does it work for non-ecommerce businesses?","Yes. Service businesses can use website knowledge, appointments, leads, CRM, support and custom business data without enabling ecommerce features."],
   ["Can I manage more than one business or assistant?","Yes. ZoChat supports separate workspaces and multiple assistants depending on your plan, with isolated configuration and permissions."],
 ];

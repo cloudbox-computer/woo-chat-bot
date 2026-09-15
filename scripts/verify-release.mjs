@@ -75,6 +75,15 @@ check('restricted writes require explicit per-assistant grant', connectorRuntime
 check('restricted grants fail closed', connectorRuntime.includes('Restricted writes still fail closed') && text('supabase/migrations/20260914023000_connector_action_restricted_permissions.sql').includes('default false'));
 check('connected capability prompt awareness', text('supabase/functions/_shared/agent.ts').includes('CONNECTED CAPABILITIES AVAILABLE NOW'));
 check('built-in action backfill on runtime', connectorRuntime.includes('ensureTenantDefaultConnectorActions'));
+check('platform resources are server-side plan gated', text('supabase/functions/platform/index.ts').includes('RESOURCE_FEATURE') && text('supabase/functions/platform/index.ts').includes('requirePlanFeature(ctx.tenant,feature)'));
+check('Growth platform features are explicit entitlements', ['workflows','richChatExperiences','contacts','testing','channels','improvements'].every(x=>text('supabase/functions/_shared/entitlements.ts').includes(`${x}: "growth"`)));
+check('Scale custom actions are runtime gated after downgrade', connectorRuntime.includes('access.customActions') && connectorRuntime.includes('!isBuiltInAction'));
+check('procedures stop executing after Growth downgrade', text('supabase/functions/_shared/agent.ts').includes('planEntitlements.workflows ? await matchingProcedureContext'));
+check('human takeover stops after Growth downgrade', text('supabase/functions/chat/index.ts').includes('controls.humanTakeoverAllowed'));
+check('OAuth rechecks plan at callback time', connectorOauth.includes('ent.liveIntegrations') && connectorOauth.includes('current plan does not include live integrations'));
+check('connected-source sync rechecks plan', dataSources.includes('Connected-source syncing requires an active Growth or Scale plan'));
+check('paid assistant cap cannot exceed plan maximum', text('supabase/functions/_shared/entitlements.ts').includes('Math.min(MAX_ASSISTANTS[plan]'));
+
 
 
 // Local relative TS imports must resolve to a file.

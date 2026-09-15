@@ -175,6 +175,12 @@ export interface PlanEntitlements {
   enterpriseControls: boolean;
   advancedPermissions: boolean;
   fullAnalytics: boolean;
+  workflows: boolean;
+  richChatExperiences: boolean;
+  contacts: boolean;
+  testing: boolean;
+  channels: boolean;
+  improvements: boolean;
   maxAssistants: number;
   minimumUpgradeFor: Partial<Record<string, "starter" | "growth" | "scale">>;
 }

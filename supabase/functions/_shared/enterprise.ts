@@ -14,13 +14,15 @@ export interface PublicTenantControls {
   monthlyConversationLimit: number;
   billingEnforced: boolean;
   subscriptionStatus: string;
+  plan: string;
+  humanTakeoverAllowed: boolean;
 }
 export async function controlsForChatbot(ref: string): Promise<PublicTenantControls | null> {
   const bots = await fetch(`${base()}/chatbots?or=(id.eq.${encodeURIComponent(ref)},public_id.eq.${encodeURIComponent(ref)})&select=tenant_id&limit=1`, { headers: headers() });
   if (!bots.ok) return null;
   const rows = await bots.json() as Array<{tenant_id:string}>;
   if (!rows[0]) return null;
-  const res = await fetch(`${base()}/tenants?id=eq.${rows[0].tenant_id}&select=id,allowed_origins,monthly_request_limit,monthly_token_limit,monthly_conversation_limit,billing_enforced,subscription_status&limit=1`, { headers: headers() });
+  const res = await fetch(`${base()}/tenants?id=eq.${rows[0].tenant_id}&select=id,allowed_origins,monthly_request_limit,monthly_token_limit,monthly_conversation_limit,billing_enforced,subscription_status,plan&limit=1`, { headers: headers() });
   if (!res.ok) return null;
   const tenants = await res.json() as Array<Record<string, unknown>>;
   const t = tenants[0];
@@ -33,6 +35,8 @@ export async function controlsForChatbot(ref: string): Promise<PublicTenantContr
     monthlyConversationLimit: Number(t.monthly_conversation_limit ?? 500),
     billingEnforced: t.billing_enforced === true,
     subscriptionStatus: String(t.subscription_status ?? "inactive"),
+    plan: String(t.plan ?? ""),
+    humanTakeoverAllowed: t.billing_enforced !== true || (["growth","scale"].includes(String(t.plan ?? "").toLowerCase()) && ["active","trialing"].includes(String(t.subscription_status ?? "").toLowerCase())),
   };
 }
 export function originAllowed(req: Request, allowed: string[]): boolean {

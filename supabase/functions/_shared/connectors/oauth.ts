@@ -1,3 +1,4 @@
+import { entitlementsForTenant } from "../entitlements.ts";
 import { env, supabaseConfig } from "../env.ts";
 import { encryptSecret, decryptSecret } from "../secrets.ts";
 import { definition, encryptCredentials } from "./registry.ts";
@@ -90,7 +91,14 @@ function normalizedOAuthCredentials(provider:string,t:Record<string,unknown>):Re
   return out;
 }
 export async function finishOAuth(req:Request,code:string,state:string):Promise<{tenantId:string;provider:string}>{
-  const row=await consumeState(state);const provider=String(row.provider);const c=cfg(provider);if(!c)throw new Error("OAuth provider is no longer configured");const verifier=row.verifier_encrypted?await decryptSecret(row.verifier_encrypted):"";const token=await exchangeCode(req,c,provider,code,verifier??"");const incoming=normalizedOAuthCredentials(provider,token);
+  const row=await consumeState(state);
+  // Re-check the plan at callback time. A tenant may have started OAuth on
+  // Growth/Scale and downgraded before the provider redirected back.
+  const tenantRows=await restRows("tenants",{id:`eq.${row.tenant_id}`,select:"plan,billing_enforced,subscription_status,max_assistants",limit:"1"});
+  const tenant=tenantRows[0];if(!tenant)throw new Error("Workspace no longer exists");
+  const ent=entitlementsForTenant({plan:String(tenant.plan??""),billingEnforced:tenant.billing_enforced===true,subscriptionStatus:String(tenant.subscription_status??""),maxAssistants:Number(tenant.max_assistants??1)});
+  if(!ent.liveIntegrations)throw new Error("Your current plan does not include live integrations. Upgrade to Growth or Scale to connect this app.");
+  const provider=String(row.provider);const c=cfg(provider);if(!c)throw new Error("OAuth provider is no longer configured");const verifier=row.verifier_encrypted?await decryptSecret(row.verifier_encrypted):"";const token=await exchangeCode(req,c,provider,code,verifier??"");const incoming=normalizedOAuthCredentials(provider,token);
   const current=await restRows("integrations",{tenant_id:`eq.${row.tenant_id}`,provider:`eq.${provider}`,select:"id,credentials",limit:"1"});const encrypted=await encryptCredentials(provider,incoming,(current[0]?.credentials??{}) as Record<string,unknown>);
   if(current[0])await restWrite("PATCH",`integrations?id=eq.${current[0].id}`,{credentials:encrypted,active:true});else await restWrite("POST","integrations",{tenant_id:row.tenant_id,provider,credentials:encrypted,active:true});
   await ensureDefaultConnectorActions(String(row.tenant_id),provider,String(row.user_id??""));

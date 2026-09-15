@@ -36,6 +36,15 @@ const PAGE_FEATURE: Partial<Record<Page, keyof PlanEntitlements>> = {
   audit: "auditLog",
   operations: "operations",
   enterprise: "enterpriseControls",
+  procedures: "workflows",
+  widgets: "richChatExperiences",
+  contacts: "contacts",
+  inbox: "humanTakeover",
+  testing: "testing",
+  analytics: "fullAnalytics",
+  backstage: "improvements",
+  channels: "channels",
+  integrations: "liveIntegrations",
 };
 
 function pageAllowed(page: Page, entitlements?: PlanEntitlements | null): boolean {
@@ -200,15 +209,15 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
 
         <div className="sidebar-nav-scroll">
           <div className="nav-label">Manage</div>
-          {NAV.filter((n) => pageAllowed(n.id, config?.entitlements)).map((n) => (
+          {NAV.map((n) => { const allowed = pageAllowed(n.id, config?.entitlements); return (
             <button
               key={n.id}
               className={`nav-item ${page === n.id ? "active" : ""}`}
               onClick={() => navigateToPage(n.id)}
             >
-              <span className="nav-icon" aria-hidden="true">{n.icon}</span><span>{n.label}</span>
+              <span className="nav-icon" aria-hidden="true">{n.icon}</span><span>{n.label}</span>{!allowed&&<span className="nav-plan-lock" title={`Requires ${requiredPlanForPage(n.id, config?.entitlements)}`}>◆</span>}
             </button>
-          ))}
+          )})}
         </div>
 
         <div className="sidebar-footer">

@@ -1368,8 +1368,9 @@ Deno.serve(async (req: Request) => {
       if (method === "PUT" || method === "PATCH") return await actionUpdateKnowledge(ctx, req, url);
       if (method === "DELETE") return await actionDeleteKnowledge(ctx, url);
     }
-    if (action === "integration_test" && method === "POST") return await actionTestIntegration(ctx, req);
+    if (action === "integration_test" && method === "POST") { requirePlanFeature(ctx.tenant, "liveIntegrations"); return await actionTestIntegration(ctx, req); }
     if (action === "integrations") {
+      requirePlanFeature(ctx.tenant, "liveIntegrations");
       requireDashboardRole(ctx, "owner");
       if (method === "GET") return await actionGetIntegrations(ctx);
       if (method === "PUT" || method === "POST") return await actionUpdateIntegration(ctx, req);

@@ -1,6 +1,7 @@
 import { supabaseConfig } from "../env.ts";
 import { decryptSecret } from "../secrets.ts";
 import { encryptCredentials } from "../connectors/registry.ts";
+import { entitlementsForTenant } from "../entitlements.ts";
 
 export interface SourceRow {
   id: string;
@@ -351,6 +352,12 @@ async function replaceIndex(sourceId:string,docs:IndexedDocument[]):Promise<{doc
   const {root}=cfg(); const payload=docs.slice(0,MAX_DOCUMENTS_PER_SOURCE);const r=await fetch(`${root}/rest/v1/rpc/replace_source_index`,{method:"POST",headers:dbHeaders(),body:JSON.stringify({p_source:sourceId,p_documents:payload})});if(!r.ok)throw new Error(`Index update failed (${r.status}): ${(await r.text()).slice(0,300)}`);const rows=await r.json() as Array<{document_count:number;chunk_count:number}>;return{documentCount:Number(rows[0]?.document_count??0),chunkCount:Number(rows[0]?.chunk_count??0)};
 }
 export async function syncSource(sourceId:string):Promise<{documentCount:number;chunkCount:number}>{
-  const source=await getSource(sourceId);if(!source)throw new Error("Source not found");await dbPatch(`data_sources?id=eq.${sourceId}`,{status:"syncing",last_error:null,updated_at:new Date().toISOString()});
+  const source=await getSource(sourceId);if(!source)throw new Error("Source not found");
+  if(source.connection_provider){
+    const tr=(await dbRows("tenants",{id:`eq.${source.tenant_id}`,select:"plan,billing_enforced,subscription_status,max_assistants",limit:"1"}))[0];
+    if(!tr)throw new Error("Workspace not found");
+    const ent=entitlementsForTenant({plan:String(tr.plan??""),billingEnforced:tr.billing_enforced===true,subscriptionStatus:String(tr.subscription_status??""),maxAssistants:Number(tr.max_assistants??1)});
+    if(!ent.liveIntegrations)throw new Error("Connected-source syncing requires an active Growth or Scale plan");
+  }await dbPatch(`data_sources?id=eq.${sourceId}`,{status:"syncing",last_error:null,updated_at:new Date().toISOString()});
   try{const docs=await gather(source);const result=await replaceIndex(sourceId,docs);return result}catch(e){const message=e instanceof Error?e.message:"Source sync failed";await dbPatch(`data_sources?id=eq.${sourceId}`,{status:"error",last_error:message.slice(0,1000),last_sync_at:new Date().toISOString(),next_sync_at:source.sync_interval_minutes?new Date(Date.now()+Math.max(15,source.sync_interval_minutes)*60000).toISOString():null,updated_at:new Date().toISOString()});throw e}
 }

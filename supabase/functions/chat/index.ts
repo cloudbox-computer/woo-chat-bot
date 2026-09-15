@@ -74,7 +74,7 @@ Deno.serve(async (req: Request) => {
       trace(requestId, "conversation-control:start", startedAt);
       const control = await conversationControl(conversationId);
       trace(requestId, "conversation-control:done", startedAt, { mode: control?.mode ?? "ai" });
-      if (control?.mode === "human") {
+      if (control?.mode === "human" && (!controls || controls.humanTakeoverAllowed)) {
         const db = getDb();
         const existing = await db.getConversation(conversationId);
         if (!existing) return json({ error: "Conversation not found", requestId }, 404, { "X-Request-Id": requestId });

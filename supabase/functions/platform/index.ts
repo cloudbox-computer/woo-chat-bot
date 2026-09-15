@@ -2,12 +2,29 @@ import { DashboardError, resolveDashboardContext, requireDashboardRole } from ".
 import { handleOptions, json } from "../_shared/cors.ts";
 import { supabaseConfig } from "../_shared/env.ts";
 import { audit } from "../_shared/audit.ts";
+import { requirePlanFeature, type PlanFeature } from "../_shared/entitlements.ts";
 
 const RESOURCE: Record<string,{table:string, order?:string}> = {
   procedures:{table:"agent_procedures",order:"updated_at.desc"}, widgets:{table:"agent_widgets",order:"updated_at.desc"},
   contacts:{table:"customer_contacts",order:"updated_at.desc"}, inbox:{table:"omnichannel_threads",order:"last_message_at.desc"},
   tests:{table:"agent_test_scenarios",order:"updated_at.desc"}, insights:{table:"conversation_insights",order:"created_at.desc"},
   suggestions:{table:"backstage_suggestions",order:"created_at.desc"}, channels:{table:"channel_connections",order:"updated_at.desc"},
+};
+
+// Every Agent Platform resource is a paid capability. This mapping is enforced
+// server-side for GET and mutations, so hiding a dashboard link is never the
+// security boundary. Website chat itself remains available on Starter through
+// the normal assistant/embed configuration; this Channels resource is for
+// additional omnichannel deployments.
+const RESOURCE_FEATURE: Record<string, PlanFeature> = {
+  procedures: "workflows",
+  widgets: "richChatExperiences",
+  contacts: "contacts",
+  inbox: "humanTakeover",
+  tests: "testing",
+  insights: "fullAnalytics",
+  suggestions: "improvements",
+  channels: "channels",
 };
 function db(){const {url,serviceRoleKey}=supabaseConfig();return {base:`${url}/rest/v1`,headers:{apikey:serviceRoleKey,Authorization:`Bearer ${serviceRoleKey}`,"Content-Type":"application/json"}}}
 async function rows(table:string, tenantId:string, order?:string){const c=db();const q=new URLSearchParams({tenant_id:`eq.${tenantId}`,select:"*",limit:"250"});if(order)q.set("order",order);const r=await fetch(`${c.base}/${table}?${q}`,{headers:c.headers});if(!r.ok)throw new DashboardError("Platform data unavailable",502);return r.json();}
@@ -16,6 +33,7 @@ async function patch(table:string,id:string,tenantId:string,body:Record<string,u
 async function del(table:string,id:string,tenantId:string){const c=db();const r=await fetch(`${c.base}/${table}?id=eq.${encodeURIComponent(id)}&tenant_id=eq.${tenantId}`,{method:"DELETE",headers:c.headers});if(!r.ok)throw new DashboardError("Could not delete item",502);}
 
 Deno.serve(async(req)=>{if(req.method==="OPTIONS")return handleOptions();try{const u=new URL(req.url),tenantId=u.searchParams.get("tenantId")||"",resource=u.searchParams.get("resource")||"";if(!tenantId)throw new DashboardError("tenantId is required",400);const ctx=await resolveDashboardContext(req,tenantId);const spec=RESOURCE[resource];if(!spec)throw new DashboardError("Unknown platform resource",400);
+ const feature=RESOURCE_FEATURE[resource];if(feature)requirePlanFeature(ctx.tenant,feature);
  if(req.method==="GET"){
    if(resource==="insights"){const data=await rows(spec.table,tenantId,spec.order);const all=data as any[];const topics=Object.entries(all.reduce((a:any,x:any)=>{a[x.topic]=(a[x.topic]||0)+1;return a},{})).sort((a:any,b:any)=>b[1]-a[1]).slice(0,12);const sentiment=all.reduce((a:any,x:any)=>{a[x.sentiment]=(a[x.sentiment]||0)+1;return a},{positive:0,neutral:0,negative:0});return json({items:all,summary:{topics,sentiment,total:all.length}})}
    return json({items:await rows(spec.table,tenantId,spec.order)});

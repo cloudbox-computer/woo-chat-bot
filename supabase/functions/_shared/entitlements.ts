@@ -14,7 +14,13 @@ export type PlanFeature =
   | "operations"
   | "enterpriseControls"
   | "advancedPermissions"
-  | "fullAnalytics";
+  | "fullAnalytics"
+  | "workflows"
+  | "richChatExperiences"
+  | "contacts"
+  | "testing"
+  | "channels"
+  | "improvements";
 
 export interface PlanEntitlements {
   plan: PaidPlanKey | "legacy" | "unsubscribed";
@@ -32,6 +38,12 @@ export interface PlanEntitlements {
   enterpriseControls: boolean;
   advancedPermissions: boolean;
   fullAnalytics: boolean;
+  workflows: boolean;
+  richChatExperiences: boolean;
+  contacts: boolean;
+  testing: boolean;
+  channels: boolean;
+  improvements: boolean;
   maxAssistants: number;
   minimumUpgradeFor: Partial<Record<PlanFeature, PaidPlanKey>>;
 }
@@ -45,6 +57,12 @@ const MINIMUM_PLAN: Record<PlanFeature, PaidPlanKey> = {
   team: "growth",
   humanTakeover: "growth",
   fullAnalytics: "growth",
+  workflows: "growth",
+  richChatExperiences: "growth",
+  contacts: "growth",
+  testing: "growth",
+  channels: "growth",
+  improvements: "growth",
   auditLog: "scale",
   operations: "scale",
   enterpriseControls: "scale",
@@ -83,6 +101,12 @@ export function entitlementsForTenant(tenant: Pick<Tenant, "plan" | "billingEnfo
       enterpriseControls: true,
       advancedPermissions: true,
       fullAnalytics: true,
+      workflows: true,
+      richChatExperiences: true,
+      contacts: true,
+      testing: true,
+      channels: true,
+      improvements: true,
       maxAssistants: Math.max(1, Number(tenant.maxAssistants ?? 10) || 10),
       minimumUpgradeFor: { ...MINIMUM_PLAN },
     };
@@ -108,6 +132,12 @@ export function entitlementsForTenant(tenant: Pick<Tenant, "plan" | "billingEnfo
       enterpriseControls: false,
       advancedPermissions: false,
       fullAnalytics: false,
+      workflows: false,
+      richChatExperiences: false,
+      contacts: false,
+      testing: false,
+      channels: false,
+      improvements: false,
       maxAssistants: 1,
       minimumUpgradeFor: { ...MINIMUM_PLAN },
     };
@@ -130,7 +160,14 @@ export function entitlementsForTenant(tenant: Pick<Tenant, "plan" | "billingEnfo
     enterpriseControls: subscriptionActive && planAllows(plan, "enterpriseControls"),
     advancedPermissions: subscriptionActive && planAllows(plan, "advancedPermissions"),
     fullAnalytics: subscriptionActive && planAllows(plan, "fullAnalytics"),
-    maxAssistants: Math.max(1, Number(tenant.maxAssistants ?? MAX_ASSISTANTS[plan]) || MAX_ASSISTANTS[plan]),
+    workflows: subscriptionActive && planAllows(plan, "workflows"),
+    richChatExperiences: subscriptionActive && planAllows(plan, "richChatExperiences"),
+    contacts: subscriptionActive && planAllows(plan, "contacts"),
+    testing: subscriptionActive && planAllows(plan, "testing"),
+    channels: subscriptionActive && planAllows(plan, "channels"),
+    improvements: subscriptionActive && planAllows(plan, "improvements"),
+    // Never trust a stale/raised tenant column to grant more assistants than the Stripe plan.
+    maxAssistants: Math.min(MAX_ASSISTANTS[plan], Math.max(1, Number(tenant.maxAssistants ?? MAX_ASSISTANTS[plan]) || MAX_ASSISTANTS[plan])),
     minimumUpgradeFor: { ...MINIMUM_PLAN },
   };
 }
@@ -171,6 +208,12 @@ export function planFeatureLabel(feature: PlanFeature): string {
     enterpriseControls: "Enterprise controls",
     advancedPermissions: "Advanced permissions",
     fullAnalytics: "Full analytics",
+    workflows: "Workflows",
+    richChatExperiences: "Rich chat experiences",
+    contacts: "Customer contacts",
+    testing: "Assistant testing",
+    channels: "Omnichannel deployment",
+    improvements: "AI improvement suggestions",
   };
   return names[feature];
 }
