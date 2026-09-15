@@ -21,6 +21,52 @@ const PROVIDER_ICON_SLUGS:Record<string,string>={
   zoho_desk:"zoho",webhook:"webhooksbyzapier"
 };
 
+
+const PROVIDER_DESCRIPTIONS:Record<string,string>={
+  woocommerce:"Products, carts, checkout, orders, inventory and store analytics.",
+  shopify:"Products, carts, checkout, orders and inventory.",
+  stripe:"Customers, payments, subscriptions, invoices and billing.",
+  hubspot:"Contacts, companies, deals and customer support workflows.",
+  salesforce:"CRM records, customers, cases and support workflows.",
+  intercom:"Contacts, conversations, tickets and customer support.",
+  freshdesk:"Customers, tickets, replies and support workflows.",
+  helpscout:"Customers, conversations, mailboxes and support workflows.",
+  gorgias:"Customers, tickets, conversations and ecommerce support.",
+  zoho_desk:"Contacts, tickets, replies and support workflows.",
+  zendesk:"Customers, tickets, replies and help-centre knowledge.",
+  slack:"Channels, conversations and team messages.",
+  whatsapp:"Customer conversations and WhatsApp messages.",
+  messenger:"Facebook Messenger conversations and messages.",
+  instagram:"Instagram conversations and direct messages.",
+  twilio:"SMS conversations and customer messaging.",
+  calendly:"Live availability, scheduled events and appointment booking.",
+  notion:"Search and use connected workspace knowledge.",
+  google_drive:"Search and use connected Drive documents as knowledge.",
+  dropbox:"Search and use connected Dropbox files as knowledge.",
+  wordpress:"Search site content and manage approved CMS content.",
+  supabase:"Business data, products, variants, prices, inventory and orders.",
+  resend:"Send approved transactional and customer emails.",
+  zapier:"Trigger approved Zapier automation workflows.",
+  make:"Trigger approved Make automation scenarios.",
+  n8n:"Trigger approved n8n automation workflows.",
+  webhook:"Trigger an approved webhook workflow.",
+  custom_rest:"Connect approved read and write REST API actions."
+};
+
+const CAPABILITY_LABELS:Record<string,string>={
+  "catalogue.read":"Search products","orders.read":"Track orders","orders.write":"Manage orders",
+  "checkout.create":"Create checkout","inventory.read":"Check inventory","analytics.read":"View analytics",
+  "payments.read":"View payments","payments.write":"Manage payments","crm.read":"Search customers",
+  "crm.write":"Update CRM","support.read":"View support","support.write":"Manage tickets",
+  "knowledge.read":"Search knowledge","messaging.read":"Read messages","messaging.send":"Send messages",
+  "calendar.read":"Check availability","calendar.write":"Book appointments","cms.read":"Read content",
+  "cms.write":"Manage content","business_data.read":"Search business data","email.send":"Send email",
+  "automation.trigger":"Run automation","custom.read":"Read API data","custom.write":"Run API actions"
+};
+function providerDescription(item:ConnectorItem){return PROVIDER_DESCRIPTIONS[providerKey(item.id)]??`Connect ${item.name} to give your assistants approved ${CATEGORY_LABELS[item.category]?.toLowerCase()??item.category} capabilities.`}
+function capabilityLabel(cap:string){return CAPABILITY_LABELS[cap]??cap.replace(/[_\.]/g," ").replace(/\b\w/g,c=>c.toUpperCase())}
+function CapabilityChips({capabilities,max=4}:{capabilities:string[];max?:number}){const shown=capabilities.slice(0,max);const extra=Math.max(0,capabilities.length-shown.length);return <div className="integration-capability-chips">{shown.map(c=><span key={c}>{capabilityLabel(c)}</span>)}{extra>0&&<span className="more">+{extra} more</span>}</div>}
+
 function providerKey(value:string){return value.trim().toLowerCase().replace(/[\s-]+/g,"_");}
 function ProviderIcon({provider,name,size="md"}:{provider:string;name:string;size?:"sm"|"md"}){
   const key=providerKey(provider);
@@ -53,7 +99,7 @@ export default function IntegrationsPage({tenantId,entitlements,onUpgrade}:{tena
     <div className="segmented"><button className={tab==="connections"?"active":""} onClick={()=>setTab("connections")}>Connections</button><button className={tab==="actions"?"active":""} onClick={()=>setTab("actions")}>Actions</button></div>
     {tab==="connections"?<>
       <div className="integration-toolbar"><input className="input" placeholder="Search integrations…" value={search} onChange={e=>setSearch(e.target.value)}/><select className="input" value={category} onChange={e=>setCategory(e.target.value)}>{categories.map(c=><option key={c} value={c}>{c==="all"?"All categories":CATEGORY_LABELS[c]??c}</option>)}</select></div>
-      <div className="integration-grid">{shown.map(item=><Card key={item.id} className="integration-card"><div className="integration-card-top"><ProviderIcon provider={item.id} name={item.name}/><div><h3>{item.name}</h3><div className="muted">{CATEGORY_LABELS[item.category]??item.category}</div></div><div className="integration-state">{item.configured?<Badge tone={item.health?.status==="failed"?"danger":"ok"}>{item.health?.status==="failed"?"Needs attention":"Connected"}</Badge>:<Badge tone="neutral">Not connected</Badge>}</div></div><p className="integration-caps">{item.capabilities.join(" · ")}</p>{item.health?.message&&<div className={`integration-health ${item.health.status}`}>{item.health.message}</div>}<div className="integration-buttons">{item.configured?<><button className="btn secondary sm" disabled={busy} onClick={()=>test(item)}>Test</button><button className="btn secondary sm" disabled={busy||locked} onClick={()=>open(item)}>Configure</button><button className="btn secondary sm danger-btn" disabled={busy||locked} onClick={()=>disconnect(item)}>Disconnect</button></>:<>{item.oauthAvailable&&<button className="btn primary sm" disabled={busy||locked} onClick={()=>void oauth(item)}>Connect securely</button>}<button className={item.oauthAvailable?"btn secondary sm":"btn primary sm"} disabled={locked} onClick={()=>locked?onUpgrade?.():open(item)}>{item.oauthAvailable?"Manual setup":"Connect"}</button></>}</div></Card>)}</div>
+      <div className="integration-grid">{shown.map(item=><Card key={item.id} className="integration-card"><div className="integration-card-top"><ProviderIcon provider={item.id} name={item.name}/><div><h3>{item.name}</h3><div className="muted">{CATEGORY_LABELS[item.category]??item.category}</div></div><div className="integration-state">{item.configured?<Badge tone={item.health?.status==="failed"?"danger":"ok"}>{item.health?.status==="failed"?"Needs attention":"Connected"}</Badge>:<Badge tone="neutral">Not connected</Badge>}</div></div><p className="integration-description">{providerDescription(item)}</p><CapabilityChips capabilities={item.capabilities}/>{item.health?.message&&<div className={`integration-health ${item.health.status}`}>{item.health.message}</div>}<div className="integration-buttons">{item.configured?<><button className="btn secondary sm" disabled={busy} onClick={()=>test(item)}>Test</button><button className="btn secondary sm" disabled={busy||locked} onClick={()=>open(item)}>Configure</button><button className="btn secondary sm danger-btn" disabled={busy||locked} onClick={()=>disconnect(item)}>Disconnect</button></>:<>{item.oauthAvailable&&<button className="btn primary sm" disabled={busy||locked} onClick={()=>void oauth(item)}>Connect securely</button>}<button className={item.oauthAvailable?"btn secondary sm":"btn primary sm"} disabled={locked} onClick={()=>locked?onUpgrade?.():open(item)}>{item.oauthAvailable?"Manual setup":"Connect"}</button></>}</div></Card>)}</div>
     </>:<>
       <Card className="actions-intro"><h2>Actions</h2><p className="desc">Every connected integration appears here. Native ZoChat capabilities and safe built-in connector actions are shown automatically; custom endpoints are optional.</p>{actionProviders.length===0&&<p className="muted">Connect a compatible integration first.</p>}<details className="advanced-actions"><summary>Advanced: add a custom action</summary><p className="muted">For developers connecting an endpoint that is not already built into ZoChat. Custom actions are available on Scale.</p><button className="btn secondary" disabled={locked||customActionsLocked||actionProviders.length===0} onClick={()=>openAction({provider:actionProviders[0]?.id??"",name:"",description:"",capability:"custom.read",method:"GET",path_template:"/",request_schema:{type:"object",properties:{}},response_mapping:{},require_confirmation:true,active:true})}>+ Add custom action</button></details></Card>
       {actionProviders.length>0?<Card className="action-presets"><h3>Connected integration actions</h3><p className="muted">Every active integration is listed below. <strong>Native</strong> actions run through ZoChat's protected capability router; connector actions are installed automatically and can be scoped to individual assistants.</p><div className="integration-action-groups">{actionProviders.map(p=>{const native=p.nativeActions??[];const templates=p.actionTemplates??[];return <section key={p.id} className="integration-action-group"><div className="integration-action-group-head"><div><strong>{p.name}</strong><span>{native.length+templates.length} built-in action{native.length+templates.length===1?"":"s"}</span></div><Badge tone="ok">Connected</Badge></div>{native.length+templates.length>0?<div className="preset-grid">{native.map(n=><div key={`${p.id}:${n.id}`} className="preset-button native-action-card"><strong>{n.name}</strong><span>{p.name} · Native · {n.capability}</span><small>{n.description}</small><em>Native capability</em></div>)}{templates.map((t:any)=>{const exists=actions.some(a=>a.provider===p.id&&a.name===t.name&&a.path_template===t.pathTemplate);return <button key={`${p.id}:${t.id}`} className="preset-button" disabled={exists||locked} onClick={()=>openPreset(p.id,t)}><strong>{t.name}</strong><span>{p.name} · {t.method} · {t.capability}</span><small>{t.description}</small>{exists&&<em>Active</em>}{!exists&&<em>Add action</em>}</button>})}</div>:<div className="integration-action-empty"><span>No prebuilt actions for this connector.</span><small>Use “Advanced: add a custom action” to define approved endpoints for {p.name}.</small></div>}</section>})}</div></Card>:null}

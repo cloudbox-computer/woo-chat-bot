@@ -2137,3 +2137,9 @@ tbody tr:hover { background:rgba(255,255,255,.018); }
 .integration-action-empty{border:1px dashed var(--line,#d1d5db);border-radius:12px;padding:14px;display:grid;gap:4px;color:var(--muted,#6b7280)}
 .integration-action-empty small{font-size:12px}
 @media(max-width:720px){.integration-action-group{padding:12px}.integration-action-group-head{align-items:flex-start}}
+
+/* Customer-facing integration cards: describe outcomes, not internal permission keys. */
+.integration-description { margin:13px 0 10px;color:#a8b3c7;font-size:12.5px;line-height:1.5;min-height:38px; }
+.integration-capability-chips { display:flex;flex-wrap:wrap;gap:6px;min-height:54px;align-content:flex-start;margin-bottom:4px; }
+.integration-capability-chips span { display:inline-flex;align-items:center;min-height:25px;padding:4px 8px;border:1px solid #303b50;border-radius:999px;background:#161e2d;color:#c8d2e3;font-size:10.5px;font-weight:700;line-height:1.15;white-space:nowrap; }
+.integration-capability-chips span.more { color:#9facbf;background:#111827;border-style:dashed; }
