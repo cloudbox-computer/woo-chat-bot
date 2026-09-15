@@ -878,14 +878,11 @@ function catalogueSearchArgs(message: string): Record<string, unknown> {
   // requests use category instead so provider search is not polluted by UI words.
   // Handle both "do you have X" and "what X do you have?" patterns.
   if (/\btell me about\b|\bdetails? (?:for|about|of)\b|\bdo you have\b/.test(m) || /\bwhat\b.*?\bdo you have\b/.test(m)) {
-    let q = "";
-    // Handle "what X do you have?" pattern first
-    const whatMatch = message.match(/\bwhat\s+(.+?)\s+do you have\b/i);
-    if (whatMatch) {
-      q = whatMatch[1].trim().replace(/[?.!]+$/, "");
-    } else {
-      // Handle "do you have X" and other patterns
-      q = message.replace(/^(?:please\s+)?(?:tell me about|show me|details? (?:for|about|of)|do you have)\s+/i, "").trim().replace(/[?.!]+$/, "");
+    let q = message.replace(/^(?:please\s+)?(?:tell me about|show me|details? (?:for|about|of)|do you have)\s+/i, "").trim().replace(/[?.!]+$/, "");
+    // Handle "what X do you have?" pattern - extract the noun after "what"
+    if (!q || q.length < 3) {
+      const whatMatch = message.match(/\bwhat\s+(.+?)\s+do you have\b/i);
+      if (whatMatch) q = whatMatch[1].trim().replace(/[?.!]+$/, "");
     }
     if (q.length >= 3) args.query = q;
   }

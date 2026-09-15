@@ -1962,6 +1962,15 @@ tbody tr:hover { background:rgba(255,255,255,.018); }
 .integration-card { position:relative;padding:18px;transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease; }
 .integration-card:hover { transform:translateY(-1px);border-color:#34415a;box-shadow:0 12px 28px rgba(0,0,0,.13); }
 .integration-logo { border-radius:12px;background:linear-gradient(145deg,rgba(124,58,237,.2),rgba(59,130,246,.08)); }
+.integration-brand-icon { width:46px;height:46px;display:grid;place-items:center;flex:0 0 auto;border:1px solid #2b3549;border-radius:12px;background:#f8fafc;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 5px 14px rgba(0,0,0,.14); }
+.integration-brand-icon img { width:27px;height:27px;display:block;object-fit:contain; }
+.integration-brand-icon span { color:#303b50;font-size:12px;font-weight:850;letter-spacing:.02em; }
+.integration-brand-icon.sm { width:32px;height:32px;border-radius:9px; }
+.integration-brand-icon.sm img { width:19px;height:19px; }
+.integration-brand-icon.sm span { font-size:9px; }
+.integration-provider-heading,.integration-modal-brand { display:flex;align-items:center;gap:10px;min-width:0; }
+.integration-modal-brand { align-items:flex-start; }
+.integration-modal-brand h2 { margin-top:2px; }
 .integration-card h3 { font-size:15px; }
 .integration-caps { color:#8290a8;line-height:1.5; }
 .integration-buttons { padding-top:12px;margin-top:12px;border-top:1px solid #252e40; }
