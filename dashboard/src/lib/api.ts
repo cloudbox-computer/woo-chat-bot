@@ -439,3 +439,12 @@ export interface BillingState {
 export function getBilling(tenantId:string) { return request<{billing:BillingState;plans:BillingPlanSummary[];canManage:boolean;entitlements:PlanEntitlements}>(`/dashboard${tenantQuery(tenantId,"billing")}`); }
 export function createBillingCheckout(tenantId:string,plan:BillingPlanKey,source:"billing"|"onboarding"="billing") { return request<{url:string}>(`/dashboard${tenantQuery(tenantId,"billing")}`,{method:"POST",body:JSON.stringify({operation:"checkout",plan,source})}); }
 export function openBillingPortal(tenantId:string) { return request<{url:string}>(`/dashboard${tenantQuery(tenantId,"billing")}`,{method:"POST",body:JSON.stringify({operation:"portal"})}); }
+
+// --- Agent platform suite -------------------------------------------------
+export type PlatformResource = "procedures"|"widgets"|"contacts"|"inbox"|"tests"|"insights"|"suggestions"|"channels";
+export interface PlatformItem { id:string; [key:string]:unknown }
+function platformQuery(tenantId:string,resource:PlatformResource,id?:string){const q=new URLSearchParams({tenantId,resource});if(id)q.set("id",id);return `/platform?${q}`;}
+export function listPlatformItems(tenantId:string,resource:PlatformResource){return request<{items:PlatformItem[];summary?:Record<string,unknown>}>(platformQuery(tenantId,resource));}
+export function createPlatformItem(tenantId:string,resource:PlatformResource,body:Record<string,unknown>){return request<{ok:boolean;item:PlatformItem}>(platformQuery(tenantId,resource),{method:"POST",body:JSON.stringify(body)});}
+export function updatePlatformItem(tenantId:string,resource:PlatformResource,id:string,body:Record<string,unknown>){return request<{ok:boolean;item:PlatformItem}>(platformQuery(tenantId,resource,id),{method:"PATCH",body:JSON.stringify({id,...body})});}
+export function deletePlatformItem(tenantId:string,resource:PlatformResource,id:string){return request<{ok:boolean}>(platformQuery(tenantId,resource,id),{method:"DELETE",body:JSON.stringify({id})});}

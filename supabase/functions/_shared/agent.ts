@@ -2,7 +2,7 @@ import type { AiProvider, ToolSpec } from "./ai.ts";
 import { providerFromConfig } from "./ai.ts";
 import type { Db } from "./db.ts";
 import { getDb } from "./db.ts";
-import { aiConfig } from "./env.ts";
+import { aiConfig, supabaseConfig } from "./env.ts";
 import {
   buildPolicy,
   checkInputSafety,
@@ -18,7 +18,21 @@ import { redactForStorage } from "./privacy.ts";
 import { connectorActionTools, connectorCapabilitySummary, listRuntimeActions, executeConnectorAction, runtimeActionIntentMatch } from "./connectors/runtime.ts";
 import { entitlementsForTenant } from "./entitlements.ts";
 
-export const MAX_TOOL_TURNS = 6;
+async function matchingProcedureContext(tenantId: string, chatbotId: string, message: string): Promise<string> {
+  try {
+    const { url, serviceRoleKey } = supabaseConfig();
+    const q = new URLSearchParams({ tenant_id: `eq.${tenantId}`, status: "eq.active", select: "name,description,trigger_phrases,steps", limit: "20" });
+    const res = await fetch(`${url.replace(/\/$/, "")}/rest/v1/agent_procedures?${q}`, { headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` } });
+    if (!res.ok) return "";
+    const all = await res.json() as Array<{name:string;description?:string;trigger_phrases?:string[];steps?:unknown}>;
+    const lower = message.toLowerCase();
+    const matches = all.filter(p => (p.trigger_phrases ?? []).some(t => t && lower.includes(t.toLowerCase()))).slice(0,2);
+    if (!matches.length) return "";
+    return `\n\nACTIVE PROCEDURE — follow required steps in order; do not skip required verification/approval/escalation steps:\n${matches.map(p=>`Procedure: ${p.name}\n${p.description ?? ""}\nSteps: ${JSON.stringify(p.steps ?? [])}`).join("\n\n")}`;
+  } catch { return ""; }
+}
+
+const MAX_TOOL_TURNS = 6;
 
 function agentTrace(requestId: string | undefined, stage: string, startedAt: number, extra: Record<string, unknown> = {}) {
   console.log(`agent:${stage}`, { requestId, elapsedMs: Date.now() - startedAt, ...extra });
@@ -392,12 +406,14 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     return { reply: emailRequestReply(tenant), products: [], conversationId };
   }
 
-  const system = buildSystemPrompt(
+  let system = buildSystemPrompt(
     tenant,
     policy,
     chatbot.name,
     connectorCapabilitySummary(runtimeActions),
   );
+  const procedureContext = await matchingProcedureContext(tenant.id, chatbotId, req.message);
+  if (procedureContext) system += procedureContext;
 
   // Flattened transcript: stored history first, then the new message last so
   // the model never loses it after a tool round-trip.

@@ -12,14 +12,23 @@ import AuditPage from "./Audit";
 import EnterprisePage from "./Enterprise";
 import OperationsPage from "./Operations";
 import BillingPage from "./Billing";
+import AgentPlatform from "./AgentPlatform";
 
-type Page = "overview" | "chatbot" | "knowledge" | "tickets" | "integrations" | "team" | "audit" | "operations" | "enterprise" | "billing" | "settings";
+type Page = "overview" | "procedures" | "widgets" | "contacts" | "inbox" | "testing" | "analytics" | "backstage" | "channels" | "chatbot" | "knowledge" | "tickets" | "integrations" | "team" | "audit" | "operations" | "enterprise" | "billing" | "settings";
 
 const NAV: Array<{ id: Page; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "chatbot", label: "AI Assistants" },
   { id: "knowledge", label: "Data Sources" },
   { id: "tickets", label: "Tickets" },
+  { id: "procedures", label: "Procedures" },
+  { id: "widgets", label: "Rich UI" },
+  { id: "contacts", label: "Contacts" },
+  { id: "inbox", label: "Helpdesk" },
+  { id: "testing", label: "Testing" },
+  { id: "analytics", label: "Analytics" },
+  { id: "backstage", label: "Backstage" },
+  { id: "channels", label: "Channels" },
   { id: "integrations", label: "Integrations" },
   { id: "team", label: "Team" },
   { id: "audit", label: "Audit Log" },
@@ -279,6 +288,14 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
               {page === "chatbot" && <ChatbotPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} onUpgrade={()=>navigateToPage("billing")} />}
               {page === "knowledge" && <KnowledgePage tenantId={selectedTenantId} />}
               {page === "tickets" && <TicketsPage tenantId={selectedTenantId} selectedTicketId={linkedTicketId} />}
+              {page === "procedures" && <AgentPlatform tenantId={selectedTenantId} section="procedures" />}
+              {page === "widgets" && <AgentPlatform tenantId={selectedTenantId} section="widgets" />}
+              {page === "contacts" && <AgentPlatform tenantId={selectedTenantId} section="contacts" />}
+              {page === "inbox" && <AgentPlatform tenantId={selectedTenantId} section="inbox" />}
+              {page === "testing" && <AgentPlatform tenantId={selectedTenantId} section="tests" />}
+              {page === "analytics" && <AgentPlatform tenantId={selectedTenantId} section="insights" />}
+              {page === "backstage" && <AgentPlatform tenantId={selectedTenantId} section="suggestions" />}
+              {page === "channels" && <AgentPlatform tenantId={selectedTenantId} section="channels" />}
               {page === "integrations" && <IntegrationsPage tenantId={selectedTenantId} entitlements={config?.entitlements ?? null} onUpgrade={()=>navigateToPage("billing")} />}
               {page === "team" && <TeamPage tenantId={selectedTenantId} entitlements={config?.entitlements ?? null} />}
               {page === "audit" && <AuditPage tenantId={selectedTenantId} />}
