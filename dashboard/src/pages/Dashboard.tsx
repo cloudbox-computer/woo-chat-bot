@@ -17,26 +17,20 @@ import AgentPlatform from "./AgentPlatform";
 type Page = "overview" | "procedures" | "widgets" | "contacts" | "inbox" | "testing" | "analytics" | "backstage" | "channels" | "chatbot" | "knowledge" | "tickets" | "integrations" | "team" | "audit" | "operations" | "enterprise" | "billing" | "settings";
 
 const NAV: Array<{ id: Page; label: string }> = [
-  { id: "overview", label: "Overview" },
-  { id: "chatbot", label: "AI Assistants" },
-  { id: "knowledge", label: "Data Sources" },
-  { id: "tickets", label: "Tickets" },
-  { id: "procedures", label: "Procedures" },
-  { id: "widgets", label: "Rich UI" },
+  { id: "overview", label: "Home" },
+  { id: "chatbot", label: "Assistants" },
+  { id: "inbox", label: "Inbox" },
   { id: "contacts", label: "Contacts" },
-  { id: "inbox", label: "Helpdesk" },
-  { id: "testing", label: "Testing" },
+  { id: "knowledge", label: "Knowledge" },
+  { id: "integrations", label: "Actions & Integrations" },
   { id: "analytics", label: "Analytics" },
-  { id: "backstage", label: "Backstage" },
-  { id: "channels", label: "Channels" },
-  { id: "integrations", label: "Integrations" },
   { id: "team", label: "Team" },
-  { id: "audit", label: "Audit Log" },
-  { id: "operations", label: "Operations" },
-  { id: "enterprise", label: "Enterprise" },
   { id: "billing", label: "Billing" },
   { id: "settings", label: "Settings" },
 ];
+// Advanced platform routes remain valid for deep links, but are intentionally
+// not exposed as separate top-level concepts in the everyday navigation.
+const VALID_HIDDEN_PAGES: Page[] = ["procedures","widgets","testing","backstage","channels","tickets","audit","operations","enterprise"];
 const PAGE_FEATURE: Partial<Record<Page, keyof PlanEntitlements>> = {
   team: "team",
   audit: "auditLog",
@@ -68,7 +62,7 @@ interface DashboardShellProps {
 function pageFromUrl(): Page {
   try {
     const value = new URLSearchParams(window.location.search).get("page");
-    return NAV.some((item) => item.id === value) ? (value as Page) : "overview";
+    return (NAV.some((item) => item.id === value) || VALID_HIDDEN_PAGES.includes(value as Page)) ? (value as Page) : "overview";
   } catch {
     return "overview";
   }

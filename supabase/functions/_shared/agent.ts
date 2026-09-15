@@ -892,17 +892,8 @@ function catalogueSearchArgs(message: string): Record<string, unknown> {
   if (over) args.minPrice = Number(over[1]);
   // Preserve a specific named-product phrase as free text. Category-only browse
   // requests use category instead so provider search is not polluted by UI words.
-  // Handle both "do you have X" and "what X do you have?" patterns.
-  if (/\btell me about\b|\bdetails? (?:for|about|of)\b|\bdo you have\b/.test(m) || /\bwhat\b.*?\bdo you have\b/.test(m)) {
-    let q = "";
-    // Priority 1: "what X do you have?" pattern
-    const whatMatch = message.match(/\bwhat\s+(.+?)\s+do you have\b/i);
-    if (whatMatch) {
-      q = whatMatch[1].trim().replace(/[?.!]+$/, "");
-    } else {
-      // Priority 2: "do you have X", "tell me about X", etc.
-      q = message.replace(/^(?:please\s+)?(?:tell me about|show me|details? (?:for|about|of)|do you have)\s+/i, "").trim().replace(/[?.!]+$/, "");
-    }
+  if (/\btell me about\b|\bdetails? (?:for|about|of)\b|\bdo you have\b/.test(m)) {
+    const q = message.replace(/^(?:please\s+)?(?:tell me about|show me|details? (?:for|about|of)|do you have)\s+/i, "").trim().replace(/[?.!]+$/, "");
     if (q.length >= 3) args.query = q;
   }
   return args;
