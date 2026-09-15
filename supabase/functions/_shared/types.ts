@@ -403,6 +403,8 @@ export interface WidgetAction {
 export interface ChatRequest {
   /** Correlation id used only for server-side tracing; never persisted as customer content. */
   requestId?: string;
+  /** Internal dashboard regression runs only; public chat never sets this. */
+  testMode?: boolean;
   chatbotId: string;
   conversationId?: string;
   conversationToken?: string;
