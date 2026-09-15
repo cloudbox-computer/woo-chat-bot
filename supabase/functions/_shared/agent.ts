@@ -215,13 +215,14 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   const trustedWidgetAction = widgetActionMatchesRuntime(req.widgetAction, runtimeActions);
   const deterministicConnector = detectDeterministicConnectorAction(req.message, runtimeActions);
   const approvedIntegrationIntent = runtimeActionIntentMatch(req.message, runtimeActions);
+  const approvedNativeCapabilityIntent = nativeCapabilityIntentMatch(req.message, allowed);
 
   // Gate 3 — tenant-configured scope. Fast lexical matching runs first; only
   // ambiguous messages use semantic classification. Server-issued widget
   // actions and unambiguous native scheduling intents bypass semantic scope
   // classification because they are already constrained to approved actions.
-  if (trustedWidgetAction || deterministicConnector || approvedIntegrationIntent) {
-    agentTrace(req.requestId, "topic-gate:bypass", agentStartedAt, { reason: trustedWidgetAction ? "trusted-widget-action" : deterministicConnector ? "deterministic-integration-intent" : "approved-integration-capability" });
+  if (trustedWidgetAction || deterministicConnector || approvedIntegrationIntent || approvedNativeCapabilityIntent) {
+    agentTrace(req.requestId, "topic-gate:bypass", agentStartedAt, { reason: trustedWidgetAction ? "trusted-widget-action" : deterministicConnector ? "deterministic-integration-intent" : approvedIntegrationIntent ? "approved-integration-capability" : "approved-native-capability" });
   } else {
     agentTrace(req.requestId, "topic-gate:start", agentStartedAt);
     const topic = await checkTopicGate(
@@ -772,15 +773,54 @@ function isProductEmailRequest(message:string):boolean{
   return wantsEmail&&wantsProducts;
 }
 
+/**
+ * Recognise only intents backed by native capabilities that are ACTUALLY exposed
+ * to this assistant. This runs before the semantic topic gate so a retail tenant
+ * does not need to enumerate every catalogue noun (rings, necklaces, bracelets,
+ * gifts, etc.) in allowedTopics. It cannot widen another tenant's scope: if that
+ * assistant has no catalogue capability, product language does not bypass Gate 3.
+ */
+function nativeCapabilityIntentMatch(message: string, toolNames: Set<string>): boolean {
+  const m = message.trim().toLowerCase();
+  if (toolNames.has("search_products") || toolNames.has("get_product") || toolNames.has("recommend_products")) {
+    const productNoun = /\b(product|products|item|items|catalogue|catalog|collection|range|ring|rings|necklace|necklaces|pendant|pendants|bracelet|bracelets|bangle|bangles|earring|earrings|jewellery|jewelry|watch|watches|gift|gifts|stock)\b/.test(m);
+    const productIntent = /\b(show|list|browse|find|search|see|sell|stock|available|recommend|suggest|buy|have|tell me about|details?|price|cost|material|size|sizes|colour|color)\b/.test(m);
+    if (productNoun && productIntent) return true;
+  }
+  return false;
+}
+
+function catalogueSearchArgs(message: string): Record<string, unknown> {
+  const m = message.trim().toLowerCase();
+  const categories: Array<[RegExp, string]> = [
+    [/\brings?\b/, "Rings"], [/\bnecklaces?\b/, "Necklaces"], [/\bpendants?\b/, "Pendants"],
+    [/\bbracelets?\b/, "Bracelets"], [/\bbangles?\b/, "Bangles"], [/\bearrings?\b/, "Earrings"],
+    [/\bwatches?\b/, "Watches"],
+  ];
+  const args: Record<string, unknown> = {};
+  for (const [re, category] of categories) if (re.test(m)) { args.category = category; break; }
+  const under = m.match(/\b(?:under|below|less than|max(?:imum)?(?: of)?)\s*£?\s*(\d+(?:\.\d{1,2})?)/);
+  if (under) args.maxPrice = Number(under[1]);
+  const over = m.match(/\b(?:over|above|more than|min(?:imum)?(?: of)?)\s*£?\s*(\d+(?:\.\d{1,2})?)/);
+  if (over) args.minPrice = Number(over[1]);
+  // Preserve a specific named-product phrase as free text. Category-only browse
+  // requests use category instead so provider search is not polluted by UI words.
+  if (/\btell me about\b|\bdetails? (?:for|about|of)\b|\bdo you have\b/.test(m)) {
+    const q = message.replace(/^(?:please\s+)?(?:tell me about|show me|details? (?:for|about|of)|do you have)\s+/i, "").trim().replace(/[?.!]+$/, "");
+    if (q.length >= 3) args.query = q;
+  }
+  return args;
+}
+
 function detectDeterministicTool(message: string, toolNames: Set<string>) {
   const m = message.trim().toLowerCase();
   // Catalogue data is authoritative. For clear list/browse/find product intents,
   // force the provider-neutral catalogue capability if the model failed to call it.
   if (
     toolNames.has("search_products") &&
-    /\b(list|show|browse|find|search|see|what|which|have|sell|stock|available)\b[^\n]{0,80}\b(products?|items?|catalogue|catalog|range|collection|stock)\b|\b(all|your) products?\b|\bwhat do you sell\b/.test(m)
+    nativeCapabilityIntentMatch(message, toolNames)
   ) {
-    return { name: "search_products" as const, arguments: {} as Record<string, unknown> };
+    return { name: "search_products" as const, arguments: catalogueSearchArgs(message) };
   }
   if (
     /(what('?s| is| are)? in my (cart|basket)|show (me )?(my )?(cart|basket)|view (my )?(cart|basket)|cart contents|basket contents)/.test(m) &&
