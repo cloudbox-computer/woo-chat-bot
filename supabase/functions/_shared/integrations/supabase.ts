@@ -48,6 +48,16 @@ function num(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function money(v: unknown, column?: string): number | undefined {
+  const n = num(v);
+  if (n === undefined) return undefined;
+  const c = (column ?? "").toLowerCase();
+  // Common commerce schemas persist money as integer minor units. Infer this
+  // semantically from the discovered column rather than hard-coding a table.
+  if (/(?:_minor|_cents|_pence|minor_units|minor_amount)$/.test(c)) return n / 100;
+  return n;
+}
+
 function bool(v: unknown): boolean | undefined {
   if (typeof v === "boolean") return v;
   if (v === "true" || v === "1" || v === 1) return true;
@@ -147,7 +157,7 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
       id:["id","product_id","item_id","sku"], name:["name","title","product_name","item_name"],
       description:["description","short_description","summary","details"], category:["category","category_name","type","collection"],
       url:["url","permalink","product_url","link","slug"], image_url:["image_url","image","images","image_urls","featured_image","thumbnail","media"],
-      price:["price","sale_price","selling_price","retail_price","unit_price","amount"], currency:["currency","currency_code"],
+      price:["price","sale_price","selling_price","retail_price","unit_price","amount","price_minor","sale_price_minor","selling_price_minor","retail_price_minor","unit_price_minor","amount_minor","price_cents","price_pence"], currency:["currency","currency_code"],
       in_stock:["in_stock","available","is_available","active","stock_status"], stock_quantity:["stock_quantity","stock","quantity","inventory_quantity","qty"],
       product_fk:["product_id","item_id","parent_id","catalogue_id","catalog_id"], sku:["sku","variant_sku"],
       variant_name:["name","title","variant_name","option_name"], size:["size","ring_size"], colour:["colour","color"],
@@ -198,7 +208,7 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
   }
 
   private baseProduct(row: Record<string,unknown>, map: ResourceMap): Product {
-    const rawPrice=this.pick(row,map,"price",["price","sale_price","selling_price","retail_price","unit_price","amount"]); const parsed=num(rawPrice);
+    const rawPrice=this.pick(row,map,"price",["price","sale_price","selling_price","retail_price","unit_price","amount","price_minor","sale_price_minor","selling_price_minor","retail_price_minor","unit_price_minor","amount_minor","price_cents","price_pence"]); const parsed=money(rawPrice, safeIdent(map.fields?.price));
     const rawStock=this.pick(row,map,"in_stock",["in_stock","available","is_available","active","stock_status"]); let inStock=bool(rawStock);
     if(inStock===undefined && typeof rawStock==="string"){const v=rawStock.toLowerCase();if(["instock","in_stock","available","active"].includes(v))inStock=true;if(["outofstock","out_of_stock","unavailable","inactive"].includes(v))inStock=false;}
     return {
@@ -218,7 +228,7 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
     const table=safeIdent(map.table), fk=safeIdent(map.fields?.product_fk); if(!table||!fk)return[];
     const p=new URLSearchParams({select:"*",limit:String(Math.min(map.maxRows??100,250))}); p.set(fk,`eq.${String(productId).replace(/[,()]/g,"")}`);
     const rows=await this.rest.query(table,p); return rows.map((r,i)=>{
-      const price=num(this.pick(r,map,"price",["price","sale_price","selling_price","retail_price","unit_price","amount"]));
+      const price=money(this.pick(r,map,"price",["price","sale_price","selling_price","retail_price","unit_price","amount","price_minor","sale_price_minor","selling_price_minor","retail_price_minor","unit_price_minor","amount_minor","price_cents","price_pence"]), safeIdent(map.fields?.price));
       const qty=num(this.pick(r,map,"stock_quantity",["stock_quantity","stock","quantity","inventory_quantity","qty"]));
       const rawStock=this.pick(r,map,"in_stock",["in_stock","available","is_available","stock_status"]); let inStock=bool(rawStock); if(inStock===undefined&&qty!==undefined)inStock=qty>0; if(inStock===undefined)inStock=true;
       const attrs:Record<string,string>={}; for(const logical of ["size","colour"]){const v=this.pick(r,map,logical,[logical,logical==="colour"?"color":"ring_size"]);if(v!=null)attrs[logical]=String(v);}

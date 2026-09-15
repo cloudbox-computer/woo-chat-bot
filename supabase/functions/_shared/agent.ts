@@ -841,12 +841,6 @@ function catalogueSearchArgs(message: string): Record<string, unknown> {
     const q = message.replace(/^(?:please\s+)?(?:tell me about|show me|details? (?:for|about|of)|do you have)\s+/i, "").trim().replace(/[?.!]+$/, "");
     if (q.length >= 3) args.query = q;
   }
-  // Handle "what X do you have?" and "what jewellery do you have?" patterns
-  const whatMatch = m.match(/\bwhat\b.*?\b(jewellery|jewelry|catalogue|catalog|products?|items?)\b/i);
-  if (whatMatch && /\bdo you have\b/.test(m)) {
-    args.query = message.replace(/^\s*what\s+.*?\s+do you have\s*[:?]*\s*/i, "").trim().replace(/[?.!]+$/, "");
-    if (args.query.length < 3) args.query = "jewellery"; // fallback to general browse
-  }
   return args;
 }
 
