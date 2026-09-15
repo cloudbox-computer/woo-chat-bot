@@ -31,7 +31,7 @@ type WidgetInteraction =
   | { type: "action_result"; status: "success" | "error"; title: string; message?: string };
 
 type WidgetAction = {
-  type: "calendly_event_type_selected" | "calendly_book" | "connector_action_submit" | "connector_action_confirm";
+  type: "calendly_event_type_selected" | "calendly_book" | "connector_action_submit" | "connector_action_confirm" | "cart_add";
   payload: Record<string, unknown>;
 };
 
@@ -304,7 +304,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
   const [askConsent, setAskConsent] = useState(false);
   // Email prompt for cart/checkout when user hasn't provided email yet
   const [showEmailPrompt, setShowEmailPrompt] = useState(false);
-  const [pendingEmailAction, setPendingEmailAction] = useState<string | null>(null);
+  const [pendingEmailAction, setPendingEmailAction] = useState<{ displayText: string; widgetAction: WidgetAction } | null>(null);
   const [emailInput, setEmailInput] = useState("");
   const [selectedVariants, setSelectedVariants] = useState<Record<string, string>>({});
 
@@ -429,7 +429,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
   }
 
 
-  async function sendAction(displayText: string, widgetAction: WidgetAction) {
+  async function sendAction(displayText: string, widgetAction: WidgetAction, customerEmailOverride?: string) {
     const trimmed = displayText.trim();
     if (!trimmed || loading) return;
     setMessages((m) => [...m, { role: "user", content: trimmed }]);
@@ -438,7 +438,7 @@ export function Widget({ config }: { config: WidgetConfig }) {
       const res = await fetch(`${config.apiUrl.replace(/\/+$/, "")}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chatbotId: config.chatbotId, message: trimmed, conversationId, conversationToken, customerEmail: effectiveEmail, emailConsent: emailConsent || undefined, widgetAction } satisfies ChatApiRequest),
+        body: JSON.stringify({ chatbotId: config.chatbotId, message: trimmed, conversationId, conversationToken, customerEmail: customerEmailOverride ?? effectiveEmail, emailConsent: emailConsent || undefined, widgetAction } satisfies ChatApiRequest),
       });
       if (!res.ok) throw new Error(`chat action failed: ${res.status}`);
       const data = (await res.json()) as ChatApiResponse;
@@ -462,13 +462,14 @@ export function Widget({ config }: { config: WidgetConfig }) {
     const variantId = selectedVariants[String(product.id)];
     if (availableVariants.length > 1 && !variantId) return;
     const selected = variantId || (availableVariants.length === 1 ? availableVariants[0].id : undefined);
-    const action = `Add ${product.name} (product ${product.id})${selected ? ` variant ${selected}` : ""} to my cart`;
+    const displayText = `Add ${product.name} to my cart`;
+    const widgetAction: WidgetAction = { type: "cart_add", payload: { productId: product.id, ...(selected ? { variantId: selected } : {}), quantity: 1 } };
     if (!effectiveEmail) {
-      setPendingEmailAction(action);
+      setPendingEmailAction({ displayText, widgetAction });
       setShowEmailPrompt(true);
       return;
     }
-    send(action);
+    void sendAction(displayText, widgetAction);
   }
 
   function handleSubmitEmail(email: string) {
@@ -483,8 +484,10 @@ export function Widget({ config }: { config: WidgetConfig }) {
     }
     setStoredEmail(email);
     if (pendingEmailAction) {
-      // Re-attempt the original action with the provided email
-      send(`${pendingEmailAction}. My email is ${email}`);
+      // Resume the exact trusted cart operation; do not turn it into model text.
+      const pending = pendingEmailAction;
+      setPendingEmailAction(null);
+      void sendAction(pending.displayText, pending.widgetAction, email);
     }
   }
 

@@ -213,6 +213,7 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // bypassing the scope gate while allowing real picker/form/confirmation
   // submissions to complete deterministically.
   const trustedWidgetAction = widgetActionMatchesRuntime(req.widgetAction, runtimeActions);
+  const trustedNativeWidgetAction = req.widgetAction?.type === "cart_add" && allowed.has("add_to_cart");
   const deterministicConnector = detectDeterministicConnectorAction(req.message, runtimeActions);
   const approvedIntegrationIntent = runtimeActionIntentMatch(req.message, runtimeActions);
   const approvedNativeCapabilityIntent = nativeCapabilityIntentMatch(req.message, allowed);
@@ -221,8 +222,8 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
   // ambiguous messages use semantic classification. Server-issued widget
   // actions and unambiguous native scheduling intents bypass semantic scope
   // classification because they are already constrained to approved actions.
-  if (trustedWidgetAction || deterministicConnector || approvedIntegrationIntent || approvedNativeCapabilityIntent) {
-    agentTrace(req.requestId, "topic-gate:bypass", agentStartedAt, { reason: trustedWidgetAction ? "trusted-widget-action" : deterministicConnector ? "deterministic-integration-intent" : approvedIntegrationIntent ? "approved-integration-capability" : "approved-native-capability" });
+  if (trustedWidgetAction || trustedNativeWidgetAction || deterministicConnector || approvedIntegrationIntent || approvedNativeCapabilityIntent) {
+    agentTrace(req.requestId, "topic-gate:bypass", agentStartedAt, { reason: trustedNativeWidgetAction ? "trusted-native-widget-action" : trustedWidgetAction ? "trusted-widget-action" : deterministicConnector ? "deterministic-integration-intent" : approvedIntegrationIntent ? "approved-integration-capability" : "approved-native-capability" });
   } else {
     agentTrace(req.requestId, "topic-gate:start", agentStartedAt);
     const topic = await checkTopicGate(
@@ -299,6 +300,24 @@ export async function runAgent(req: ChatRequest): Promise<ChatResponse> {
     (existing?.customerEmail ?? "").trim() ||
     emailFromMessage ||
     "";
+
+  // Native commerce controls are trusted application actions, not chat prompts.
+  // Validate and execute them server-side so the model can neither refuse nor
+  // rewrite an Add-to-cart click, and never expose internal product IDs in chat.
+  if (req.widgetAction?.type === "cart_add") {
+    if (!allowed.has("add_to_cart")) return { reply: "Cart is not enabled for this assistant.", products: [], conversationId };
+    const p = req.widgetAction.payload ?? {};
+    const productId = typeof p.productId === "string" || typeof p.productId === "number" ? p.productId : undefined;
+    if (productId === undefined) return { reply: "I couldn't identify that product. Please try again.", products: [], conversationId };
+    const ctx = { tenant, chatbotId, conversationId, db, allowed, customerEmail: knownEmail, currentUserMessage: req.message, auditConversationId: persistConversation ? conversationId : undefined };
+    const result = await executeTool("add_to_cart", { productId, variantId: typeof p.variantId === "string" ? p.variantId : undefined, quantity: typeof p.quantity === "number" ? p.quantity : 1 }, ctx);
+    const reply = result.text || (result.ok ? "Added to cart." : "I couldn't add that item to the cart.");
+    if (persistConversation) {
+      await db.appendMessage({ id: crypto.randomUUID(), conversationId, role: "user", content: "Add product to cart", createdAt: new Date().toISOString() });
+      await db.appendMessage({ id: crypto.randomUUID(), conversationId, role: "assistant", content: tenant.piiRedactionEnabled === false ? reply : redactForStorage(reply), createdAt: new Date().toISOString() });
+    }
+    return { reply, products: result.products ?? [], interaction: result.interaction, conversationId };
+  }
 
   // Structured widget interactions bypass model interpretation. The widget can
   // submit a selected appointment, completed action form, or confirmation and
@@ -840,12 +859,6 @@ function catalogueSearchArgs(message: string): Record<string, unknown> {
   if (/\btell me about\b|\bdetails? (?:for|about|of)\b|\bdo you have\b/.test(m)) {
     const q = message.replace(/^(?:please\s+)?(?:tell me about|show me|details? (?:for|about|of)|do you have)\s+/i, "").trim().replace(/[?.!]+$/, "");
     if (q.length >= 3) args.query = q;
-  }
-  // Handle "what X do you have?" and "what jewellery do you have?" patterns
-  const whatMatch = m.match(/\bwhat\b.*?\b(jewellery|jewelry|catalogue|catalog|products?|items?)\b/i);
-  if (whatMatch && /\bdo you have\b/.test(m)) {
-    args.query = message.replace(/^\s*what\s+.*?\s+do you have\s*[:?]*\s*/i, "").trim().replace(/[?.!]+$/, "");
-    if (args.query.length < 3) args.query = "jewellery"; // fallback to general browse
   }
   return args;
 }

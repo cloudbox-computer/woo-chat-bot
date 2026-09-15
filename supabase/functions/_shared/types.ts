@@ -396,7 +396,7 @@ export type WidgetInteraction =
     };
 
 export interface WidgetAction {
-  type: "calendly_event_type_selected" | "calendly_book" | "connector_action_submit" | "connector_action_confirm";
+  type: "calendly_event_type_selected" | "calendly_book" | "connector_action_submit" | "connector_action_confirm" | "cart_add";
   payload: Record<string, unknown>;
 }
 

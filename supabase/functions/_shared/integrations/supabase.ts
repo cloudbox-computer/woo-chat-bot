@@ -134,7 +134,7 @@ class SupabaseRest {
 export class SupabaseCatalogueProvider implements CatalogueProvider {
   readonly providerId = "supabase";
   private rest: SupabaseRest;
-  private resolved?: Promise<{ product: ResourceMap; variant?: ResourceMap }>;
+  private resolved?: Promise<{ product: ResourceMap; variant?: ResourceMap; image?: ResourceMap }>;
 
   constructor(private tenant: Tenant, private map: ResourceMap) {
     if (!tenant.supabaseUrl || !tenant.supabaseAnonKey) throw new Error("Supabase connection is incomplete");
@@ -156,7 +156,7 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
     const aliases: Record<string,string[]> = {
       id:["id","product_id","item_id","sku"], name:["name","title","product_name","item_name"],
       description:["description","short_description","summary","details"], category:["category","category_name","type","collection"],
-      url:["url","permalink","product_url","link","slug"], image_url:["image_url","image","images","image_urls","featured_image","thumbnail","media"],
+      url:["product_url","permalink","product_link","storefront_url"], image_url:["image_url","image","images","image_urls","featured_image","thumbnail","media"],
       price:["price","sale_price","selling_price","retail_price","unit_price","amount","price_minor","sale_price_minor","selling_price_minor","retail_price_minor","unit_price_minor","amount_minor","price_cents","price_pence"], currency:["currency","currency_code"],
       in_stock:["in_stock","available","is_available","active","stock_status"], stock_quantity:["stock_quantity","stock","quantity","inventory_quantity","qty"],
       product_fk:["product_id","item_id","parent_id","catalogue_id","catalog_id"], sku:["sku","variant_sku"],
@@ -167,7 +167,7 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
     return undefined;
   }
 
-  private async resolve(): Promise<{ product: ResourceMap; variant?: ResourceMap }> {
+  private async resolve(): Promise<{ product: ResourceMap; variant?: ResourceMap; image?: ResourceMap }> {
     if (this.resolved) return this.resolved;
     this.resolved = (async () => {
       if (safeIdent(this.map.table) && this.map.fields && Object.keys(this.map.fields).length) return { product: this.map };
@@ -195,7 +195,22 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
         for (const logical of ["id","variant_name","sku","currency","in_stock","stock_quantity","size","colour"]) { const found=this.inferField(cols,logical); if(found) vf[logical]=found; }
         if (!bestVariant || score > bestVariant.score) bestVariant={score,map:{table,fields:vf,identityColumn:productId,maxRows:250}};
       }
-      return { product, variant: bestVariant?.map };
+      let bestImage: {score:number,map:ResourceMap}|undefined;
+      for (const [table, cols] of Object.entries(schema)) {
+        if (table === productTable || table === bestVariant?.map.table) continue;
+        const fk = this.inferField(cols, "product_fk");
+        const lower = new Map(cols.map((x) => [x.toLowerCase(), x]));
+        const imageField = ["image_url","url","src","public_url","publicurl","storage_url","cdn_url"].map((x)=>lower.get(x)).find((x): x is string => Boolean(x));
+        if (!fk || !imageField) continue;
+        let score = /image|media|gallery|photo/.test(table.toLowerCase()) ? 10 : 2;
+        if (lower.has("is_primary") || lower.has("primary")) score += 3;
+        if (lower.has("sort_order") || lower.has("position")) score += 1;
+        const imf: FieldMap = { product_fk: fk, image_url: imageField };
+        if (lower.has("is_primary")) imf.is_primary = lower.get("is_primary")!; else if (lower.has("primary")) imf.is_primary = lower.get("primary")!;
+        if (lower.has("sort_order")) imf.sort_order = lower.get("sort_order")!; else if (lower.has("position")) imf.sort_order = lower.get("position")!;
+        if (!bestImage || score > bestImage.score) bestImage = { score, map: { table, fields: imf, maxRows: 20 } };
+      }
+      return { product, variant: bestVariant?.map, image: bestImage?.map };
     })();
     return this.resolved;
   }
@@ -218,10 +233,28 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
       currency:str(this.pick(row,map,"currency",["currency","currency_code"]))??this.tenant.currency,
       description:str(this.pick(row,map,"description",["description","short_description","summary","details"])),
       category:str(this.pick(row,map,"category",["category","category_name","type","collection"])),
-      url:str(this.pick(row,map,"url",["url","permalink","product_url","link"])),
+      url:this.productUrl(this.pick(row,map,"url",["product_url","permalink","product_link","storefront_url"])),
       imageUrl:imageUrl(this.pick(row,map,"image_url",["image_url","image","images","featured_image","thumbnail","media"])),
       inStock, stockQuantity:num(this.pick(row,map,"stock_quantity",["stock_quantity","stock","quantity","inventory_quantity","qty"])),
     };
+  }
+
+  private productUrl(v: unknown): string | undefined {
+    const raw = str(v); if (!raw) return undefined;
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith("/") && this.tenant.storeUrl) { try { return new URL(raw, this.tenant.storeUrl).toString(); } catch { return undefined; } }
+    return undefined; // Never guess a storefront route from a slug.
+  }
+
+  private async primaryImage(productId:string|number,map?:ResourceMap):Promise<string|undefined> {
+    const table=safeIdent(map?.table), fk=safeIdent(map?.fields?.product_fk); if(!table||!fk)return undefined;
+    const q=new URLSearchParams({select:"*",limit:String(Math.min(map?.maxRows??20,50))}); q.set(fk,`eq.${String(productId).replace(/[,()]/g,"")}`);
+    try {
+      const rows=await this.rest.query(table,q); const primary=safeIdent(map?.fields?.is_primary), order=safeIdent(map?.fields?.sort_order), image=safeIdent(map?.fields?.image_url);
+      rows.sort((a,b)=>{if(primary){const ap=bool(a[primary])?1:0,bp=bool(b[primary])?1:0;if(ap!==bp)return bp-ap;}if(order)return(num(a[order])??9999)-(num(b[order])??9999);return 0;});
+      for(const row of rows){const found=imageUrl(image?row[image]:undefined);if(found)return found;}
+    } catch { /* optional enrichment */ }
+    return undefined;
   }
 
   private async variants(productId:string|number, map:ResourceMap):Promise<ProductVariant[]> {
@@ -237,8 +270,8 @@ export class SupabaseCatalogueProvider implements CatalogueProvider {
     });
   }
 
-  private async hydrate(row:Record<string,unknown>, resolved:{product:ResourceMap;variant?:ResourceMap}):Promise<Product>{
-    const p=this.baseProduct(row,resolved.product); if(resolved.variant){const vs=await this.variants(p.id,resolved.variant);p.variants=vs;if(vs.length){const prices=vs.map(v=>v.price).filter((x):x is number=>x!==undefined&&Number.isFinite(x));if(prices.length){p.price=Math.min(...prices);p.priceMax=Math.max(...prices);p.priceAvailable=true;}if(p.inStock===undefined)p.inStock=vs.some(v=>v.inStock);}} return p;
+  private async hydrate(row:Record<string,unknown>, resolved:{product:ResourceMap;variant?:ResourceMap;image?:ResourceMap}):Promise<Product>{
+    const p=this.baseProduct(row,resolved.product); if(resolved.variant){const vs=await this.variants(p.id,resolved.variant);p.variants=vs;if(vs.length){const prices=vs.map(v=>v.price).filter((x):x is number=>x!==undefined&&Number.isFinite(x));if(prices.length){p.price=Math.min(...prices);p.priceMax=Math.max(...prices);p.priceAvailable=true;}if(p.inStock===undefined)p.inStock=vs.some(v=>v.inStock);}} if(!p.imageUrl&&resolved.image)p.imageUrl=await this.primaryImage(p.id,resolved.image); return p;
   }
 
   private matches(p:Product,input:ProductSearchInput):boolean{
