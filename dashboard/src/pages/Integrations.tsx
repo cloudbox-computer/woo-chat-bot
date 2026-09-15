@@ -11,14 +11,14 @@ const CATEGORY_LABELS:Record<string,string>={commerce:"Commerce",payments:"Payme
 // Simple Icons gives us the recognisable vendor mark without coupling the
 // dashboard bundle to a large icon package. Unknown/custom providers keep a
 // polished neutral fallback instead of showing a broken image.
-const PROVIDER_ICON_SLUGS:Record<string,string>={
-  supabase:"supabase",shopify:"shopify",woocommerce:"woocommerce",stripe:"stripe",
-  calendly:"calendly",resend:"resend",slack:"slack",hubspot:"hubspot",
-  salesforce:"salesforce",intercom:"intercom",zendesk:"zendesk",freshdesk:"freshworks",
-  helpscout:"helpscout",gorgias:"gorgias",twilio:"twilio",whatsapp:"whatsapp",
-  instagram:"instagram",messenger:"messenger",google_drive:"googledrive",dropbox:"dropbox",
-  notion:"notion",wordpress:"wordpress",zapier:"zapier",make:"make",n8n:"n8n",
-  zoho_desk:"zoho",webhook:"webhooksbyzapier"
+const PROVIDER_ICON_DOMAINS:Record<string,string>={
+  supabase:"supabase.com",shopify:"shopify.com",woocommerce:"woocommerce.com",stripe:"stripe.com",
+  calendly:"calendly.com",resend:"resend.com",slack:"slack.com",hubspot:"hubspot.com",
+  salesforce:"salesforce.com",intercom:"intercom.com",zendesk:"zendesk.com",freshdesk:"freshworks.com",
+  helpscout:"helpscout.com",gorgias:"gorgias.com",twilio:"twilio.com",whatsapp:"whatsapp.com",
+  instagram:"instagram.com",messenger:"messenger.com",google_drive:"drive.google.com",dropbox:"dropbox.com",
+  notion:"notion.so",wordpress:"wordpress.org",zapier:"zapier.com",make:"make.com",n8n:"n8n.io",
+  zoho_desk:"zoho.com",resend_email:"resend.com"
 };
 
 
@@ -70,10 +70,14 @@ function CapabilityChips({capabilities,max=4}:{capabilities:string[];max?:number
 function providerKey(value:string){return value.trim().toLowerCase().replace(/[\s-]+/g,"_");}
 function ProviderIcon({provider,name,size="md"}:{provider:string;name:string;size?:"sm"|"md"}){
   const key=providerKey(provider);
-  const slug=PROVIDER_ICON_SLUGS[key]??PROVIDER_ICON_SLUGS[providerKey(name)];
-  const[fallback,setFallback]=React.useState(!slug);
-  React.useEffect(()=>setFallback(!slug),[slug]);
-  return <div className={`integration-brand-icon ${size}`} aria-hidden="true">{!fallback&&slug?<img src={`https://cdn.simpleicons.org/${slug}`} alt="" loading="lazy" referrerPolicy="no-referrer" onError={()=>setFallback(true)}/>:<span>{name.slice(0,2).toUpperCase()}</span>}</div>;
+  const domain=PROVIDER_ICON_DOMAINS[key]??PROVIDER_ICON_DOMAINS[providerKey(name)];
+  const[fallback,setFallback]=React.useState(!domain);
+  React.useEffect(()=>setFallback(!domain),[domain]);
+  // Use the provider's live site favicon rather than a third-party brand-icon
+  // catalogue. This avoids missing Simple Icons slugs (Salesforce, Gorgias,
+  // Freshworks, etc.) while keeping the mark tied to the actual provider.
+  const src=domain?`https://www.google.com/s2/favicons?domain_url=https://${domain}&sz=128`:"";
+  return <div className={`integration-brand-icon ${size}`} aria-hidden="true">{!fallback&&src?<img src={src} alt="" loading="lazy" referrerPolicy="no-referrer" onError={()=>setFallback(true)}/>:<svg viewBox="0 0 24 24" role="img" aria-label={`${name} integration`}><path d="M8.5 3.5h7v4h-7zM4 10h16v10H4z" fill="none" stroke="currentColor" strokeWidth="1.7"/><path d="M8 14h8M8 17h5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg>}</div>;
 }
 
 export default function IntegrationsPage({tenantId,entitlements,onUpgrade}:{tenantId:string;entitlements:PlanEntitlements|null;onUpgrade?:()=>void}){

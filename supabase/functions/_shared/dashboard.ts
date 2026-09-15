@@ -90,6 +90,37 @@ export function authUserFromRequest(req: Request): AuthUser | null {
   };
 }
 
+/** Verify the bearer token with Supabase Auth before trusting its claims.
+ * This is required for browser-facing functions such as `platform` where the
+ * gateway must allow unauthenticated OPTIONS requests for CORS preflight.
+ */
+export async function verifiedAuthUserFromRequest(req: Request): Promise<AuthUser | null> {
+  const token = bearerToken(req);
+  if (!token) return null;
+  const url = (env("SUPABASE_URL") ?? "").replace(/\/+$/g, "");
+  const key = env("SUPABASE_SERVICE_ROLE_KEY") ?? env("SUPABASE_ANON_KEY") ?? "";
+  if (!url || !key) return null;
+
+  const res = await fetch(`${url}/auth/v1/user`, {
+    headers: { Authorization: `Bearer ${token}`, apikey: key },
+  });
+  if (!res.ok) return null;
+
+  const auth = await res.json().catch(() => null) as Record<string, unknown> | null;
+  const id = typeof auth?.id === "string" ? auth.id : "";
+  if (!id) return null;
+
+  // AAL is a session claim rather than a stable user property. It is safe to
+  // read after /auth/v1/user has cryptographically validated the same token.
+  const payload = decodeJwt(token) ?? {};
+  return {
+    id,
+    email: typeof auth?.email === "string" ? auth.email : undefined,
+    role: typeof payload.role === "string" ? payload.role : undefined,
+    aal: typeof payload.aal === "string" ? payload.aal : undefined,
+  };
+}
+
 export class DashboardError extends Error {
   status: number;
   code?: string;
@@ -156,7 +187,7 @@ export async function resolveDashboardContext(
   req: Request,
   tenantId?: string,
 ): Promise<DashboardContext> {
-  const user = authUserFromRequest(req);
+  const user = await verifiedAuthUserFromRequest(req);
   if (!user) throw new DashboardError("Not authenticated", 401);
   const key = env("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 

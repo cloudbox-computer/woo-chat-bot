@@ -1,0 +1,13 @@
+import fs from "node:fs";
+const config=fs.readFileSync(new URL("../supabase/config.toml", import.meta.url),"utf8");
+const cors=fs.readFileSync(new URL("../supabase/functions/_shared/cors.ts", import.meta.url),"utf8");
+const auth=fs.readFileSync(new URL("../supabase/functions/_shared/dashboard.ts", import.meta.url),"utf8");
+const platform=fs.readFileSync(new URL("../supabase/functions/platform/index.ts", import.meta.url),"utf8");
+const integrations=fs.readFileSync(new URL("../dashboard/src/pages/Integrations.tsx", import.meta.url),"utf8");
+const fail=(m)=>{console.error(`FAIL: ${m}`);process.exitCode=1};
+if(!/\[functions\.platform\][\s\S]*?verify_jwt\s*=\s*false/.test(config)) fail("platform must allow browser OPTIONS through gateway");
+if(!cors.includes('Access-Control-Allow-Methods')) fail("shared CORS methods missing");
+if(!platform.includes('req.method==="OPTIONS"')||!platform.includes('handleOptions()')) fail("platform OPTIONS handler missing");
+if(!auth.includes('verifiedAuthUserFromRequest')||!auth.includes('/auth/v1/user')) fail("dashboard bearer token must be verified when gateway JWT is disabled");
+if(integrations.includes('cdn.simpleicons.org')) fail("fragile Simple Icons CDN remains in integrations page");
+if(!process.exitCode) console.log("Platform CORS/auth/icon regression checks passed.");

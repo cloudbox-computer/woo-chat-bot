@@ -59,3 +59,9 @@ verify_jwt = true
 
 [functions.health]
 verify_jwt = false
+
+# The platform function handles browser CORS preflight itself. Gateway JWT
+# verification is disabled so unauthenticated OPTIONS requests are not rejected;
+# actual API requests are cryptographically verified inside resolveDashboardContext.
+[functions.platform]
+verify_jwt = false
