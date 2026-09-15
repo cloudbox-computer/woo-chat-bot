@@ -105,7 +105,13 @@ export function createIntegrationRouter(tenant: Tenant): IntegrationRouter {
       ? config.catalogue
       : { preferred: true, maxRows: 100 };
 
-    if (catalogueConfig.table && (!registry.catalogue || catalogueConfig.preferred === true)) {
+    // A connected Supabase project is itself enough to expose the catalogue
+    // adapter. The adapter performs schema discovery lazily on the first
+    // catalogue request, so requiring `catalogueConfig.table` here would
+    // disable search_products before discovery ever gets a chance to run.
+    // Explicit mappings still win; otherwise the provider discovers the
+    // product/variant/price relationship from the exposed schema.
+    if (!registry.catalogue || catalogueConfig.preferred === true) {
       registry.catalogue = new SupabaseCatalogueProvider(tenant, catalogueConfig);
       capabilities.add("catalogue.read");
     }
