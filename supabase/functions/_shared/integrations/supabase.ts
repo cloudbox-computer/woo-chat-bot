@@ -39,6 +39,11 @@ function str(v: unknown): string | undefined {
 }
 
 function num(v: unknown): number | undefined {
+  // Never coerce missing/blank database values to zero. Number("") and
+  // Number(null) are 0 in JavaScript, which previously made an unmapped
+  // catalogue price appear to customers as a genuine £0.00 product.
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === "string" && !v.trim()) return undefined;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : undefined;
 }

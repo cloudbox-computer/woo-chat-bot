@@ -43,6 +43,8 @@ const woo = text('supabase/functions/_shared/woo.ts');
 check('AI tool surface is provider-neutral', tools.includes('search_business_data') && !tools.includes('query_supabase_table'));
 check('capability router gates tool availability', router.includes('TOOL_CAPABILITIES') && router.includes('toolSupported'));
 check('Supabase discovery exposes catalogue before table mapping', router.includes('new SupabaseCatalogueProvider(tenant, catalogueConfig)') && !router.includes('if (catalogueConfig.table && (!registry.catalogue'));
+check('catalogue browse is hard-grounded before model generation', text('supabase/functions/_shared/agent.ts').includes('authoritative-catalogue-grounding') && text('supabase/functions/_shared/agent.ts').includes('groundedCatalogueReply'));
+check('blank Supabase prices cannot coerce to zero', text('supabase/functions/_shared/integrations/supabase.ts').includes('typeof v === "string" && !v.trim()') && text('supabase/functions/_shared/integrations/supabase.ts').includes('v === null || v === undefined'));
 check('production Woo client has no mock catalogue fallback', !woo.includes('MockWooClient') && !woo.includes('IVY_PEARLS_CATALOGUE'));
 check('integration capability architecture documented', fs.existsSync(path.join(root,'INTEGRATION_CAPABILITY_ARCHITECTURE.md')));
 check('data-source migration included', schema.includes('create table if not exists public.data_sources') && schema.includes('replace_source_index'));
