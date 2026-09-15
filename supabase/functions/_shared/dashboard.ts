@@ -28,7 +28,11 @@ export function embedScriptFor(publicId: string): string {
   const configured = env("WIDGET_BASE_URL")?.trim();
   if (configured) {
     const src = configured.replace(/\/+$/g, "");
-    return `<!-- ChatWidget -->\n<script async src="${src}" data-chatbot="${id}"></script>`;
+    const join = src.includes("?") ? "&" : "?";
+    // Keep data-chatbot as the canonical identifier and duplicate the opaque
+    // public id in the widget-host URL as a recovery path for CMS optimisers
+    // that strip custom data-* attributes. No tenant id or Supabase URL leaks.
+    return `<!-- ZoChat -->\n<script async src="${src}${join}chatbot=${encodeURIComponent(id)}" data-chatbot="${id}"></script>`;
   }
 
   throw new Error("WIDGET_BASE_URL is required to generate a public embed snippet");

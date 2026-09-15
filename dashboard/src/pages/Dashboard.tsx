@@ -273,7 +273,7 @@ export default function DashboardShell({ tenants, selectedTenantId, onTenantSele
         {selectedTenantId && (
           <React.Fragment key={selectedTenantId}>
             {!pageAllowed(page, config?.entitlements) ? (
-              <div className="page"><div className="card"><h1>Upgrade required</h1><p className="desc">This feature is available on the {requiredPlanForPage(page, config?.entitlements)} plan.</p><button className="btn primary" onClick={()=>navigateToPage("billing")}>View plans</button></div></div>
+              <div className="page"><div className="card"><h1>Available on {requiredPlanForPage(page, config?.entitlements)}</h1><p className="desc">Your current plan does not include this feature. You can review the plan and, if eligible, start the 14-day trial from Billing. Nothing is charged today when a trial is available.</p><button className="btn primary" onClick={()=>navigateToPage("billing")}>View plan & trial</button></div></div>
             ) : (<>
               {page === "overview" && <Overview tenantId={selectedTenantId} config={config} onNavigate={(next)=>navigateToPage(next)} />}
               {page === "chatbot" && <ChatbotPage tenantId={selectedTenantId} config={config} onConfigChange={setConfig} onUpgrade={()=>navigateToPage("billing")} />}

@@ -58,8 +58,8 @@ export default function EnterprisePage({tenantId}:{tenantId:string}) {
       </Card>
 
       <Card><h2>Network & widget access</h2><p className="desc">Restrict where the dashboard and public widget can be used.</p>
-        <Field label="Allowed widget origins" hint="One HTTPS origin per line, e.g. https://example.com"><textarea className="input" rows={5} value={origins} onChange={e=>setOrigins(e.target.value)} placeholder="https://example.com"/></Field>
-        <Field label="Dashboard IP allowlist" hint="Exact IPv4/IPv6 addresses or IPv4 CIDR ranges. Your current IP must be included before the list can be enabled."><textarea className="input" rows={5} value={ipRules} onChange={e=>setIpRules(e.target.value)} placeholder="203.0.113.10\n203.0.113.0/24"/></Field>
+        <Field label="Allowed widget origins" hint="One HTTPS origin per line. Leave blank only while testing; add your live website origin before launch."><textarea className="input" rows={5} value={origins} onChange={e=>setOrigins(e.target.value)} placeholder="No origins configured"/></Field>
+        <Field label="Dashboard IP allowlist" hint="Exact IPv4/IPv6 addresses or IPv4 CIDR ranges. Your current IP must be included before the list can be enabled."><textarea className="input" rows={5} value={ipRules} onChange={e=>setIpRules(e.target.value)} placeholder="No dashboard IP restriction configured"/></Field>
       </Card>
 
       <Card><h2>MFA & sessions</h2><p className="desc">Workspace-wide MFA enforcement requires the owner enabling it to already have an AAL2 session.</p>

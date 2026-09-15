@@ -56,3 +56,6 @@ verify_jwt = false
 
 [functions.connector-oauth-start]
 verify_jwt = true
+
+[functions.health]
+verify_jwt = false

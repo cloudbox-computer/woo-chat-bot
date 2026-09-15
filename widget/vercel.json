@@ -4,6 +4,10 @@
   "installCommand": "npm install",
   "rewrites": [
     {
+      "source": "/health",
+      "destination": "https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/health"
+    },
+    {
       "source": "/widget-config",
       "destination": "https://xsegdfcqqktxoqlbazpl.supabase.co/functions/v1/widget-config"
     },

@@ -16,10 +16,15 @@ interface PublicWidgetConfig {
 }
 
 function scriptElement(): HTMLScriptElement | null {
-  return (
-    (document.currentScript as HTMLScriptElement | null) ??
-    document.querySelector<HTMLScriptElement>("script[data-chatbot]")
-  );
+  const current = document.currentScript as HTMLScriptElement | null;
+  if (current) return current;
+  const tagged = document.querySelector<HTMLScriptElement>("script[data-chatbot]");
+  if (tagged) return tagged;
+  // Async/deferred loaders can make document.currentScript unavailable. Fall
+  // back to the script that loaded this bundle so ?chatbot=... embeds remain
+  // recoverable instead of silently failing.
+  const scripts = Array.from(document.scripts) as HTMLScriptElement[];
+  return scripts.reverse().find((el) => /(?:\/widget(?:\.js)?)(?:[?#]|$)/i.test(el.src || "")) ?? null;
 }
 
 function apiBaseFromScript(script: HTMLScriptElement | null): string {
@@ -45,13 +50,20 @@ async function loadConfig(apiBase: string, publicId: string): Promise<PublicWidg
 }
 
 function readPublicId(script: HTMLScriptElement | null): string {
-  return script?.dataset.chatbot ?? script?.getAttribute("data-chatbot") ?? "";
+  const attr = script?.dataset.chatbot ?? script?.getAttribute("data-chatbot") ?? "";
+  if (attr.trim()) return attr.trim();
+  try {
+    const src = script?.src ? new URL(script.src, document.baseURI) : null;
+    return src?.searchParams.get("chatbot")?.trim() ?? "";
+  } catch {
+    return "";
+  }
 }
 
 function init(script: HTMLScriptElement | null) {
   const publicId = readPublicId(script);
   if (!publicId) {
-    console.error("Chat widget requires data-chatbot");
+    console.error("ZoChat could not identify the assistant. Re-copy the embed snippet from Dashboard → Assistants; it must include data-chatbot or ?chatbot=.");
     return;
   }
 

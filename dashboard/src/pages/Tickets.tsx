@@ -15,9 +15,14 @@ export default function TicketsPage({ tenantId, selectedTicketId = null }: { ten
   const [filter, setFilter] = React.useState("all");
 
   async function load() {
+    setError(null);
+    setItems(null);
     try {
-      const res = await listTickets(tenantId);
-      setItems(res.items);
+      const timeout = new Promise<never>((_, reject) =>
+        window.setTimeout(() => reject(new Error("Tickets took too long to load. Please try again.")), 12000)
+      );
+      const res = await Promise.race([listTickets(tenantId), timeout]);
+      setItems(Array.isArray(res.items) ? res.items : []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load tickets");
     }
@@ -48,7 +53,7 @@ export default function TicketsPage({ tenantId, selectedTicketId = null }: { ten
     }
   }
 
-  if (error) return <ErrorBox message={error} />;
+  if (error) return <div className="page"><ErrorBox message={error} /><button className="btn secondary" onClick={() => void load()}>Retry tickets</button></div>;
   if (items === null) return <Spinner />;
 
   const filtered =
